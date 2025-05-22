@@ -19,12 +19,26 @@ class FaceRecognizer:
         self.app.prepare(ctx_id=0, det_size=(320, 320))
         self.known_faces = self.load_embeddings(EMBEDDINGS_FILE)
 
-    def load_embeddings(self, filename):
-        if not os.path.exists(filename):
+    def load_embeddings(self, embeddings_file):
+        """Carga los embeddings desde un archivo JSON"""
+        if not os.path.exists(embeddings_file):
+            print(f"Archivo de embeddings no encontrado: {embeddings_file}")
             return {}
-        with open(filename, 'r') as f:
-            data = json.load(f)
-        return {name: [np.array(e) for e in emb_list] for name, emb_list in data.items()}
+        
+        try:
+            with open(embeddings_file, 'r') as f:
+                file_content = f.read().strip()
+                if not file_content:  # Verificar si el archivo está vacío
+                    print(f"Archivo de embeddings vacío: {embeddings_file}")
+                    return {}
+                data = json.loads(file_content)
+                return data
+        except json.JSONDecodeError:
+            print(f"Error al decodificar el archivo JSON: {embeddings_file}")
+            return {}
+        except Exception as e:
+            print(f"Error al cargar embeddings: {str(e)}")
+            return {}
 
     def calculate_similarity(self, e1, e2):
         return np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2))
