@@ -14,6 +14,9 @@ import os
 import numpy as np
 import threading
 import time
+import unicodedata
+import re
+from fastapi.middleware.cors import CORSMiddleware
 
 # Inicializar Firebase (asegúrate de tener el archivo de credenciales)
 try:
@@ -26,6 +29,15 @@ except Exception as e:
     firebase_initialized = False
 
 app = FastAPI()
+
+# Configurar CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Lista de orígenes permitidos
+    allow_credentials=True,                   # Permitir cookies
+    allow_methods=["*"],                      # Permitir todos los métodos HTTP
+    allow_headers=["*"],                      # Permitir todos los headers
+)
 
 # Modelo para la respuesta de estadísticas
 class RecognitionStats(BaseModel):
@@ -61,6 +73,8 @@ CAMERAS = {
         "auth_required": False
     }
 }
+
+
 
 # Diccionario para almacenar estadísticas por cámara
 camera_stats = {
@@ -176,6 +190,32 @@ def root():
 # Variable para almacenar los últimos documentos procesados
 last_processed_docs = set()
 
+def normalize_text(text):
+    """
+    Normaliza un texto eliminando tildes y caracteres especiales.
+    Convierte a minúsculas y luego capitaliza cada palabra.
+    """
+    if not text:
+        return ""
+    
+    # Convertir a minúsculas
+    text = text.lower()
+    
+    # Normalizar (eliminar tildes)
+    text = unicodedata.normalize('NFKD', text)
+    text = ''.join([c for c in text if not unicodedata.combining(c)])
+    
+    # Reemplazar la letra ñ por n
+    text = text.replace('ñ', 'n')
+    
+    # Eliminar caracteres especiales, dejando solo letras, números y espacios
+    text = re.sub(r'[^a-z0-9\s]', '', text)
+    
+    # Capitalizar cada palabra
+    text = ' '.join(word.capitalize() for word in text.split())
+    
+    return text
+
 def monitor_firebase_visitors():
     """
     Función que monitorea constantemente la colección 'visitors' de Firebase
@@ -238,9 +278,19 @@ def monitor_firebase_visitors():
                         
                     if 'images' not in doc_data['faceData']:
                         continue
-                        
-                    # Construir el nombre completo de la persona
-                    person_name = f"{doc_data['firstName']} {doc_data['lastName']}"
+                    
+                    # Verificar si existe el campo idNumber
+                    id_number = doc_data.get('idNumber', '')
+                    if not id_number:
+                        print(f"Advertencia: Documento {doc_id} no tiene número de identificación. Usando ID del documento.")
+                        id_number = doc_id
+                    
+                    # Normalizar nombre y apellido
+                    first_name = normalize_text(doc_data['firstName'])
+                    last_name = normalize_text(doc_data['lastName'])
+                    
+                    # Construir el nombre completo de la persona con los nombres normalizados e incluir el número de identificación
+                    person_name = f"{first_name} {last_name}_{id_number}"
                     person_embeddings = []
                     
                     # Obtener las imágenes del subcampo Images
