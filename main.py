@@ -74,8 +74,6 @@ CAMERAS = {
     }
 }
 
-
-
 # Diccionario para almacenar estadísticas por cámara
 camera_stats = {
     cam_id: {
@@ -87,6 +85,11 @@ camera_stats = {
     }
     for cam_id in CAMERAS
 }
+
+# Variable para almacenar los últimos documentos procesados
+last_processed_docs = set()
+
+# ==================== FUNCIONES NORMALES ====================
 
 def update_stats(camera_id: str, name: str):
     """Actualiza las estadísticas de reconocimiento"""
@@ -127,68 +130,6 @@ def generate_stream(config, camera_id: str):
             b'--frame\r\n'
             b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n'
         )
-
-@app.get("/stream/{camera_id}")
-def video_feed(camera_id: str):
-    if camera_id not in CAMERAS:
-        return Response(content="Cámara no encontrada", status_code=404)
-    return StreamingResponse(generate_stream(CAMERAS[camera_id], camera_id),
-                             media_type='multipart/x-mixed-replace; boundary=frame')
-
-@app.get("/stats/{camera_id}", response_model=RecognitionStats)
-def get_stats(camera_id: str):
-    """Endpoint para obtener estadísticas de reconocimiento"""
-    if camera_id not in camera_stats:
-        return Response(content="Cámara no encontrada", status_code=404)
-    
-    stats = camera_stats[camera_id]
-    total = stats["total_detections"] or 1  # Evitar división por cero
-    
-    return {
-        "total_detections": stats["total_detections"],
-        "recognized": stats["recognized"],
-        "unrecognized": stats["unrecognized"],
-        "recognition_rate": stats["recognized"] / total,
-        "last_updated": stats["last_updated"],
-        "recognized_names": list(stats["recognized_names"])
-    }
-
-@app.get("/people-count/{camera_id}")
-def get_people_count(camera_id: str):
-    """Endpoint para obtener el conteo de personas actual"""
-    if camera_id not in camera_stats:
-        return Response(content="Cámara no encontrada", status_code=404)
-    
-    stats = camera_stats[camera_id]
-    return {
-        "current_people": stats["recognized"] + stats["unrecognized"],
-        "recognized": stats["recognized"],
-        "unrecognized": stats["unrecognized"]
-    }
-
-@app.get("/recognized-people/{camera_id}")
-def get_recognized_people(camera_id: str):
-    """Endpoint para obtener la lista de personas reconocidas"""
-    if camera_id not in camera_stats:
-        return Response(content="Cámara no encontrada", status_code=404)
-    
-    return {
-        "recognized_people": list(camera_stats[camera_id]["recognized_names"]),
-        "count": len(camera_stats[camera_id]["recognized_names"])
-    }
-
-
-@app.get('/favicon.ico', include_in_schema=False)
-async def disable_favicon():
-    """Endpoint para ignorar favicon.ico"""
-    return Response(status_code=204)  # Respuesta vacía con código 204 (No Content)
-
-@app.get("/")
-def root():
-    return Response(content="API cámaras funcionando!", status_code=200)
-
-# Variable para almacenar los últimos documentos procesados
-last_processed_docs = set()
 
 def normalize_text(text):
     """
@@ -291,6 +232,13 @@ def monitor_firebase_visitors():
                     
                     # Construir el nombre completo de la persona con los nombres normalizados e incluir el número de identificación
                     person_name = f"{first_name} {last_name}_{id_number}"
+                    
+                    # Verificar si ya existe este nombre en los embeddings (verificación O(1))
+                    if person_name in embeddings_data:
+                        print(f"Persona {person_name} ya tiene embeddings. Omitiendo procesamiento.")
+                        processed_names.append(f"{person_name} (ya existente)")
+                        continue
+                        
                     person_embeddings = []
                     
                     # Obtener las imágenes del subcampo Images
@@ -356,6 +304,67 @@ def monitor_firebase_visitors():
         except Exception as e:
             print(f"Error en el monitoreo de Firebase: {e}")
             time.sleep(60)  # Esperar un minuto antes de reintentar en caso de error
+
+# ==================== ENDPOINTS ====================
+
+@app.get("/stream/{camera_id}")
+def video_feed(camera_id: str):
+    if camera_id not in CAMERAS:
+        return Response(content="Cámara no encontrada", status_code=404)
+    return StreamingResponse(generate_stream(CAMERAS[camera_id], camera_id),
+                             media_type='multipart/x-mixed-replace; boundary=frame')
+
+@app.get("/stats/{camera_id}", response_model=RecognitionStats)
+def get_stats(camera_id: str):
+    """Endpoint para obtener estadísticas de reconocimiento"""
+    if camera_id not in camera_stats:
+        return Response(content="Cámara no encontrada", status_code=404)
+    
+    stats = camera_stats[camera_id]
+    total = stats["total_detections"] or 1  # Evitar división por cero
+    
+    return {
+        "total_detections": stats["total_detections"],
+        "recognized": stats["recognized"],
+        "unrecognized": stats["unrecognized"],
+        "recognition_rate": stats["recognized"] / total,
+        "last_updated": stats["last_updated"],
+        "recognized_names": list(stats["recognized_names"])
+    }
+
+@app.get("/people-count/{camera_id}")
+def get_people_count(camera_id: str):
+    """Endpoint para obtener el conteo de personas actual"""
+    if camera_id not in camera_stats:
+        return Response(content="Cámara no encontrada", status_code=404)
+    
+    stats = camera_stats[camera_id]
+    return {
+        "current_people": stats["recognized"] + stats["unrecognized"],
+        "recognized": stats["recognized"],
+        "unrecognized": stats["unrecognized"]
+    }
+
+@app.get("/recognized-people/{camera_id}")
+def get_recognized_people(camera_id: str):
+    """Endpoint para obtener la lista de personas reconocidas"""
+    if camera_id not in camera_stats:
+        return Response(content="Cámara no encontrada", status_code=404)
+    
+    return {
+        "recognized_people": list(camera_stats[camera_id]["recognized_names"]),
+        "count": len(camera_stats[camera_id]["recognized_names"])
+    }
+
+
+@app.get('/favicon.ico', include_in_schema=False)
+async def disable_favicon():
+    """Endpoint para ignorar favicon.ico"""
+    return Response(status_code=204)  # Respuesta vacía con código 204 (No Content)
+
+@app.get("/")
+def root():
+    return Response(content="API cámaras funcionando!", status_code=200)
 
 if __name__ == "__main__":
     # Iniciar el hilo de monitoreo de Firebase
