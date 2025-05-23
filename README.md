@@ -10,7 +10,6 @@ Sistema de gestión de streams de video con capacidades de reconocimiento facial
 
 - Transmisión en tiempo real desde múltiples cámaras IP
 - Reconocimiento facial utilizando modelos de IA
-- Integración con Firebase Firestore
 - Generación de estadísticas de reconocimiento
 - API REST documentada con FastAPI
 - Sistema modular y escalable
