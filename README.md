@@ -28,3 +28,20 @@ Sistema de gestión de streams de video con capacidades de reconocimiento facial
 ```bash
 git clone https://github.com/davidtao44/API_cameras.git
 cd API_cameras
+
+2. Crea un entorno virtual:
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
+
+3. Instala las dependencias:
+```bash
+pip install -r requirements.txt
+
+4. Configura Firebase:
+  Configura tus credenciales:fdffsdf
+:    
+
+
+5. Ejecución
