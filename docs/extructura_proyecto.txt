@@ -1,0 +1,23 @@
+├── app/
+│   ├── __init__.py          # Archivo que hace que Python trate el directorio como paquete
+│   ├── main.py              # Punto de entrada principal
+│   ├── config/
+│   │   ├── __init__.py      # Archivo que hace que Python trate el directorio como paquete
+│   │   ├── firebase.py      # Configuración de Firebase
+│   │   └── settings.py      # Configuración general
+│   ├── endpoints/
+│   │   ├── __init__.py
+│   │   ├── camera.py        # Endpoints relacionados con cámaras
+│   │   └── stats.py         # Endpoints de estadísticas
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── schemas.py       # Modelos Pydantic
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── camera_service.py # Lógica de cámaras
+│   │   ├── stats_service.py  # Lógica de estadísticas
+│   │   └── firebase_service.py # Lógica de Firebase
+│   └── utils/
+│       ├── __init__.py
+│       ├── helpers.py       # Funciones auxiliares
+│       └── normalizers.py    # Funciones de normalización

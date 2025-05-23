@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Documentación API camaras</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Sidebar Navigation -->
+    <nav class="sidebar">
+        <div class="sidebar-header">
+            <h2>Servidor de Video</h2>
+            <small>API Documentación</small>
+        </div>
+        <ul class="sidebar-nav">
+            <li><a href="#introduction" class="active">Introducción</a></li>
+            
+            <li class="has-submenu">
+                <a href="#structure">Estructura del Proyecto</a>
+                <ul class="submenu">
+                    <li><a href="#config">Configuración</a></li>
+                    <li><a href="#endpoints">Endpoints</a></li>
+                    <li><a href="#services">Servicios</a></li>
+                    <li><a href="#utils">Utilidades</a></li>
+                </ul>
+            </li>
+            
+            <li class="has-submenu">
+                <a href="#api-endpoints">Endpoints API</a>
+                <ul class="submenu">
+                    <li><a href="#camera-endpoints">Cámaras</a></li>
+                    <li><a href="#stats-endpoints">Estadísticas</a></li>
+                </ul>
+            </li>
+            
+            <li><a href="#examples">Ejemplos</a></li>
+            <li><a href="#authentication">Autenticación</a></li>
+            <li><a href="#errors">Manejo de Errores</a></li>
+        </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <header class="header">
+            <div class="header-content">
+        <div>
+            <h1>Documentación del Servidor de Video</h1>
+            <p>API para gestión de streams de video y reconocimiento facial</p>
+        </div>
+        <div class="logo-container">
+            <img src="logo.png" alt="Logo de la empresa" class="company-logo">
+        </div>
+    </div>
+        </header>
+
+        <!-- Introduction -->
+        <section id="introduction" class="module">
+            <div class="module-header">
+                <h2>Introducción</h2>
+            </div>
+            <div class="module-content">
+                <p>Este servidor proporciona una API para:</p>
+                <ul>
+                    <li>Transmisión de video en tiempo real desde múltiples cámaras</li>
+                    <li>Reconocimiento facial utilizando modelos de IA</li>
+                    <li>Generación de estadísticas de reconocimiento</li>
+                </ul>
+                <p>La API sigue el estándar REST y utiliza JSON para el intercambio de datos.</p>
+            </div>
+        </section>
+
+        <!-- Project Structure -->
+        <section id="structure" class="module">
+            <div class="module-header">
+                <h2>Estructura del Proyecto</h2>
+            </div>
+            <div class="module-content">
+                <p>El proyecto está organizado en módulos con responsabilidades específicas:</p>
+                
+                <div id="config">
+                    <h3>Configuración (config/)</h3>
+                    <ul>
+                        <li><code>firebase.py</code>: Conexión con Firebase y manejo de credenciales</li>
+                        <li><code>settings.py</code>: Enrolamiento de las camaras, dependiendo de su autenticación</li>
+                    </ul>
+                </div>
+                
+                <div id="endpoints">
+                    <h3>Endpoints (endpoints/)</h3>
+                    <ul>
+                        <li><code>camera.py</code>: Gestión de streams de video</li>
+                        <li><code>stats.py</code>: Estadísticas del sistema</li>
+                    </ul>
+                </div>
+                
+                <div id="services">
+                    <h3>Servicios (services/)</h3>
+                    <ul>
+                        <li><code>camera_service.py</code>: Lógica de manejo de cámaras</li>
+                        <li><code>camera_stream.py</code>: Gestión de streams de video</li>
+                        <li><code>firebase_service.py</code>: Interacción con Firebase</li>
+                        <li><code>stats_service.py</code>: Procesamiento de estadísticas</li>
+                    </ul>
+                </div>
+                
+                <div id="utils">
+                    <h3>Utilidades (utils/)</h3>
+                    <ul>
+                        <li><code>helpers.py</code>: Funciones auxiliares</li>
+                        <li><code>normalizers.py</code>: Normalización de datos</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- API Endpoints -->
+        <section id="api-endpoints" class="module">
+            <div class="module-header">
+                <h2>Endpoints API</h2>
+            </div>
+            <div class="module-content">
+                <div id="camera-endpoints">
+                    <h3>Endpoints de Cámaras</h3>
+                    
+                    <div class="endpoint">
+                        <div>
+                            <span class="endpoint-method get">GET</span>
+                            <span class="endpoint-path">/stream/{camera_id}</span>
+                        </div>
+                        <div class="endpoint-description">
+                            <p>Stream de video en tiempo real desde la cámara especificada.</p>
+                            <p><strong>Parámetros:</strong></p>
+                            <ul>
+                                <li><code>camera_id</code>: Identificador de la cámara (ej: "cam1", "cam2")</li>
+                            </ul>
+                            <p><strong>Respuesta:</strong> Stream de video MJPEG</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="stats-endpoints">
+                    <h3>Endpoints de Estadísticas</h3>
+                    
+                    <div class="endpoint">
+                        <div>
+                            <span class="endpoint-method get">GET</span>
+                            <span class="endpoint-path">/stats/{camera_id}</span>
+                        </div>
+                        <div class="endpoint-description">
+                            <p>Obtiene estadísticas de reconocimiento facial para la cámara especificada.</p>
+                            <p><strong>Respuesta JSON:</strong></p>
+                            <pre>
+{
+  "total_detections": 42,
+  "recognized": 35,
+  "unrecognized": 7,
+  "recognition_rate": 0.833,
+  "last_updated": "2023-05-15T14:30:22",
+  "recognized_names": ["Juan Pérez", "María García"]
+}</pre>
+                        </div>
+                    </div>
+                    
+                    <div class="endpoint">
+                        <div>
+                            <span class="endpoint-method get">GET</span>
+                            <span class="endpoint-path">/people-count/{camera_id}</span>
+                        </div>
+                        <div class="endpoint-description">
+                            <p>Obtiene el conteo actual de personas detectadas.</p>
+                            <p><strong>Respuesta JSON:</strong></p>
+                            <pre>
+{
+  "current_people": 5,
+  "recognized": 3,
+  "unrecognized": 2
+}</pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Examples -->
+        <section id="examples" class="module">
+            <div class="module-header">
+                <h2>Ejemplos</h2>
+            </div>
+            <div class="module-content">
+                <h3>Obtener stream de cámara</h3>
+                <pre><code>import requests
+
+# URL del endpoint de stream
+url = "http://localhost:8000/stream/cam1"
+
+# Hacer la petición (usar un cliente que soporte streams)
+response = requests.get(url, stream=True)
+
+# Procesar los frames (ejemplo simplificado)
+for chunk in response.iter_content(chunk_size=1024):
+    # Procesar el frame de video
+    process_frame(chunk)</code></pre>
+                
+                <h3>Obtener estadísticas</h3>
+                <pre><code>fetch('http://localhost:8000/stats/cam1')
+  .then(response => response.json())
+  .then(data => console.log(data));</code></pre>
+            </div>
+        </section>
+
+        <!-- Authentication -->
+        <section id="authentication" class="module">
+            <div class="module-header">
+                <h2>Autenticación</h2>
+            </div>
+            <div class="module-content">
+                <p>La API utiliza los siguientes métodos de autenticación:</p>
+                <ul>
+                    <li><strong>Streams de cámara:</strong> Autenticación básica HTTP o digest según configuración</li>
+                    <li><strong>Firebase:</strong> Por medio de las credenciales suministradas</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- Error Handling -->
+        <section id="errors" class="module">
+            <div class="module-header">
+                <h2>Manejo de Errores</h2>
+            </div>
+            <div class="module-content">
+                <p>La API devuelve códigos HTTP estándar y mensajes de error en formato JSON:</p>
+                
+                <div class="endpoint">
+                    <div>
+                        <span class="endpoint-method" style="background-color: #fee2e2; color: #991b1b;">ERROR</span>
+                        <span class="endpoint-path">404 Cámara no encontrada</span>
+                    </div>
+                    <div class="endpoint-description">
+                        <pre>
+{
+  "detail": "Cámara no encontrada"
+}</pre>
+                    </div>
+                </div>
+                
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // Toggle submenus in sidebar
+        document.querySelectorAll('.has-submenu > a').forEach(item => {
+            item.addEventListener('click', function(e) {
+                e.preventDefault();
+                const parent = this.parentElement;
+                parent.classList.toggle('active');
+            });
+        });
+
+        // Smooth scrolling for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                
+                // Update active link in sidebar
+                document.querySelectorAll('.sidebar-nav a').forEach(link => {
+                    link.classList.remove('active');
+                });
+                this.classList.add('active');
+                
+                // Scroll to section
+                const targetId = this.getAttribute('href');
+                const targetElement = document.querySelector(targetId);
+                if (targetElement) {
+                    targetElement.scrollIntoView({
+                        behavior: 'smooth'
+                    });
+                }
+            });
+        });
+
+        // Highlight current section in sidebar
+        window.addEventListener('scroll', function() {
+            const sections = document.querySelectorAll('.module');
+            let currentSection = '';
+            
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop - 100;
+                if (window.scrollY >= sectionTop) {
+                    currentSection = '#' + section.getAttribute('id');
+                }
+            });
+            
+            document.querySelectorAll('.sidebar-nav a').forEach(link => {
+                link.classList.remove('active');
+                if (link.getAttribute('href') === currentSection) {
+                    link.classList.add('active');
+                }
+            });
+        });
+    </script>
+</body>
+</html>
