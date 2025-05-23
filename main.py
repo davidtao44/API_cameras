@@ -167,6 +167,18 @@ def monitor_firebase_visitors():
     
     print("Iniciando monitoreo de la colección 'visitors' en Firebase...")
     
+    # Crear o cargar el archivo de mapeo si no existe
+    mapping_file = "firebase_mapping.json"
+    firebase_mapping = {}
+    if os.path.exists(mapping_file):
+        try:
+            with open(mapping_file, 'r') as f:
+                file_content = f.read().strip()
+                if file_content:
+                    firebase_mapping = json.loads(file_content)
+        except Exception as e:
+            print(f"Error al cargar el archivo de mapeo: {e}")
+    
     while True:
         try:
             if not firebase_initialized:
@@ -210,51 +222,51 @@ def monitor_firebase_visitors():
                                 print(f"Documentos eliminados: {deleted_doc_ids}")
                                 print(f"Claves actuales en embeddings: {list(embeddings_data.keys())}")
                                 
-                                # Necesitamos obtener los nombres completos de las personas eliminadas
-                                # Para esto, consultamos la información almacenada antes de la eliminación
                                 deleted_names = []
                                 keys_to_delete = []
                                 
-                                # Obtener información de los documentos eliminados desde Firebase
-                                # Como los documentos ya fueron eliminados, usaremos la información que tenemos
-                                # en el archivo de embeddings y los logs
-                                
-                                # Primero, intentamos buscar en los logs o mensajes anteriores
-                                # Si no es posible, pedimos al usuario que proporcione el nombre
-                                
-                                # Para cada documento eliminado, pedimos al usuario que confirme qué entrada eliminar
+                                # Para cada documento eliminado, buscar la clave correspondiente en el mapeo
                                 for doc_id in deleted_doc_ids:
                                     print(f"Procesando documento eliminado: {doc_id}")
                                     
-                                    # Aquí podríamos implementar una lógica para guardar un mapeo de IDs a nombres
-                                    # Por ahora, simplemente preguntamos al usuario o usamos información de logs
-                                    
-                                    # Buscar todas las claves que podrían corresponder al documento eliminado
-                                    # y mostrarlas para que el usuario pueda confirmar
-                                    potential_keys = list(embeddings_data.keys())
-                                    
-                                    # Si solo hay una clave, asumimos que es la correcta
-                                    if len(potential_keys) == 1:
-                                        key_to_delete = potential_keys[0]
-                                        keys_to_delete.append(key_to_delete)
-                                        deleted_names.append(key_to_delete)
-                                        print(f"Se eliminará automáticamente: {key_to_delete}")
+                                    # Verificar si tenemos un mapeo para este documento
+                                    if doc_id in firebase_mapping:
+                                        key_to_delete = firebase_mapping[doc_id]
+                                        if key_to_delete in embeddings_data:
+                                            keys_to_delete.append(key_to_delete)
+                                            deleted_names.append(key_to_delete)
+                                            print(f"Se eliminará usando mapeo: {key_to_delete}")
+                                        else:
+                                            print(f"Advertencia: La clave {key_to_delete} no existe en embeddings")
                                     else:
-                                        # Buscar en los logs o mensajes para identificar qué clave eliminar
-                                        # Por ahora, implementamos una lógica simple basada en el nombre mencionado en los logs
-                                        for key in potential_keys:
-                                            # Verificar si el nombre aparece en los logs o mensajes recientes
-                                            # Esto es una simplificación, en la práctica necesitaríamos una forma más robusta
-                                            # de mapear IDs de documentos a nombres de personas
-                                            if "Jhonatan Alvarez" in key and doc_id in deleted_doc_ids:
-                                                keys_to_delete.append(key)
-                                                deleted_names.append(key)
-                                                print(f"Se eliminará basado en logs: {key}")
+                                        # Si no tenemos un mapeo, intentamos buscar por coincidencia parcial
+                                        # Esto es una solución temporal hasta que tengamos un mapeo completo
+                                        found = False
+                                        for key in list(embeddings_data.keys()):
+                                            # Extraer el número de identificación de la clave (después del guion bajo)
+                                            parts = key.split('_')
+                                            if len(parts) > 1:
+                                                id_number = parts[-1]
+                                                # Si el ID del documento está en el número de identificación o viceversa
+                                                if doc_id in id_number or id_number in doc_id:
+                                                    keys_to_delete.append(key)
+                                                    deleted_names.append(key)
+                                                    print(f"Se eliminará por coincidencia de ID: {key}")
+                                                    found = True
+                                                    break
+                                        
+                                        if not found:
+                                            print(f"No se pudo encontrar una clave para el documento {doc_id}")
                                 
                                 # Eliminar las claves identificadas
                                 for key in keys_to_delete:
                                     try:
                                         del embeddings_data[key]
+                                        # También eliminar del mapeo si existe
+                                        for doc_id, mapped_key in list(firebase_mapping.items()):
+                                            if mapped_key == key:
+                                                del firebase_mapping[doc_id]
+                                                print(f"Eliminado mapeo para: {doc_id} -> {key}")
                                         print(f"Eliminado: {key}")
                                     except KeyError:
                                         print(f"Error: No se pudo eliminar {key}, no existe en el diccionario")
@@ -263,6 +275,10 @@ def monitor_firebase_visitors():
                                 if keys_to_delete:
                                     with open(embeddings_file, 'w') as f:
                                         json.dump(embeddings_data, f)
+                                    
+                                    # Guardar el mapeo actualizado
+                                    with open(mapping_file, 'w') as f:
+                                        json.dump(firebase_mapping, f)
                                     
                                     # Recargar los embeddings en el reconocedor
                                     recognizer.known_faces = recognizer.load_embeddings(embeddings_file)
@@ -321,6 +337,9 @@ def monitor_firebase_visitors():
                     # Construir el nombre completo de la persona con los nombres normalizados e incluir el número de identificación
                     person_name = f"{first_name} {last_name}_{id_number}"
                     
+                    # Guardar el mapeo entre el ID del documento y el nombre de la persona
+                    firebase_mapping[doc_id] = person_name
+                    
                     # Verificar si ya existe este nombre en los embeddings (verificación O(1))
                     if person_name in embeddings_data:
                         print(f"Persona {person_name} ya tiene embeddings. Omitiendo procesamiento.")
@@ -377,6 +396,10 @@ def monitor_firebase_visitors():
                 if processed_names:
                     with open(embeddings_file, 'w') as f:
                         json.dump(embeddings_data, f)
+                    
+                    # Guardar el mapeo actualizado
+                    with open(mapping_file, 'w') as f:
+                        json.dump(firebase_mapping, f)
                     
                     # Recargar los embeddings en el reconocedor
                     recognizer.known_faces = recognizer.load_embeddings(embeddings_file)
