@@ -28,11 +28,3 @@ Sistema de gestión de streams de video con capacidades de reconocimiento facial
 ```bash
 git clone https://github.com/davidtao44/API_cameras.git
 cd API_cameras
-
-
-
-
-
-
-
-
