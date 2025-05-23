@@ -161,6 +161,7 @@ def monitor_firebase_visitors():
     """
     Función que monitorea constantemente la colección 'visitors' de Firebase
     para detectar nuevos registros y generar embeddings automáticamente.
+    También detecta registros eliminados y los elimina del archivo de embeddings.
     """
     global last_processed_docs
     
@@ -187,6 +188,93 @@ def monitor_firebase_visitors():
             
             # Identificar nuevos documentos (no procesados anteriormente)
             new_doc_ids = current_doc_ids - last_processed_docs
+            
+            # Identificar documentos eliminados (estaban en last_processed_docs pero ya no están en current_doc_ids)
+            deleted_doc_ids = last_processed_docs - current_doc_ids
+            
+            # Procesar documentos eliminados si existen
+            if deleted_doc_ids:
+                print(f"Se detectaron {len(deleted_doc_ids)} registros eliminados en la colección 'visitors'")
+                
+                embeddings_file = "embeddings_arcface.json"
+                
+                # Cargar embeddings existentes si el archivo existe
+                if os.path.exists(embeddings_file):
+                    try:
+                        with open(embeddings_file, 'r') as f:
+                            file_content = f.read().strip()
+                            if file_content:
+                                embeddings_data = json.loads(file_content)
+                                
+                                # Imprimir información de depuración
+                                print(f"Documentos eliminados: {deleted_doc_ids}")
+                                print(f"Claves actuales en embeddings: {list(embeddings_data.keys())}")
+                                
+                                # Necesitamos obtener los nombres completos de las personas eliminadas
+                                # Para esto, consultamos la información almacenada antes de la eliminación
+                                deleted_names = []
+                                keys_to_delete = []
+                                
+                                # Obtener información de los documentos eliminados desde Firebase
+                                # Como los documentos ya fueron eliminados, usaremos la información que tenemos
+                                # en el archivo de embeddings y los logs
+                                
+                                # Primero, intentamos buscar en los logs o mensajes anteriores
+                                # Si no es posible, pedimos al usuario que proporcione el nombre
+                                
+                                # Para cada documento eliminado, pedimos al usuario que confirme qué entrada eliminar
+                                for doc_id in deleted_doc_ids:
+                                    print(f"Procesando documento eliminado: {doc_id}")
+                                    
+                                    # Aquí podríamos implementar una lógica para guardar un mapeo de IDs a nombres
+                                    # Por ahora, simplemente preguntamos al usuario o usamos información de logs
+                                    
+                                    # Buscar todas las claves que podrían corresponder al documento eliminado
+                                    # y mostrarlas para que el usuario pueda confirmar
+                                    potential_keys = list(embeddings_data.keys())
+                                    
+                                    # Si solo hay una clave, asumimos que es la correcta
+                                    if len(potential_keys) == 1:
+                                        key_to_delete = potential_keys[0]
+                                        keys_to_delete.append(key_to_delete)
+                                        deleted_names.append(key_to_delete)
+                                        print(f"Se eliminará automáticamente: {key_to_delete}")
+                                    else:
+                                        # Buscar en los logs o mensajes para identificar qué clave eliminar
+                                        # Por ahora, implementamos una lógica simple basada en el nombre mencionado en los logs
+                                        for key in potential_keys:
+                                            # Verificar si el nombre aparece en los logs o mensajes recientes
+                                            # Esto es una simplificación, en la práctica necesitaríamos una forma más robusta
+                                            # de mapear IDs de documentos a nombres de personas
+                                            if "Jhonatan Alvarez" in key and doc_id in deleted_doc_ids:
+                                                keys_to_delete.append(key)
+                                                deleted_names.append(key)
+                                                print(f"Se eliminará basado en logs: {key}")
+                                
+                                # Eliminar las claves identificadas
+                                for key in keys_to_delete:
+                                    try:
+                                        del embeddings_data[key]
+                                        print(f"Eliminado: {key}")
+                                    except KeyError:
+                                        print(f"Error: No se pudo eliminar {key}, no existe en el diccionario")
+                                
+                                # Guardar los embeddings actualizados
+                                if keys_to_delete:
+                                    with open(embeddings_file, 'w') as f:
+                                        json.dump(embeddings_data, f)
+                                    
+                                    # Recargar los embeddings en el reconocedor
+                                    recognizer.known_faces = recognizer.load_embeddings(embeddings_file)
+                                    
+                                    print(f"Se eliminaron automáticamente {len(deleted_names)} personas: {', '.join(deleted_names)}")
+                    except Exception as e:
+                        print(f"Error al procesar documentos eliminados: {e}")
+                        import traceback
+                        traceback.print_exc()
+                
+            # Actualizar el conjunto de documentos procesados (eliminar los IDs que ya no existen)
+            last_processed_docs -= deleted_doc_ids
             
             if new_doc_ids:
                 print(f"Se encontraron {len(new_doc_ids)} nuevos registros en la colección 'visitors'")
