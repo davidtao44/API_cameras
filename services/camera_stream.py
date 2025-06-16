@@ -16,7 +16,7 @@ THRESHOLD = 0.5
 class FaceRecognizer:
     def __init__(self):
         self.app = FaceAnalysis(providers=['CUDAExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(320, 320))
+        self.app.prepare(ctx_id=0, det_size=(640, 640))
         self.known_faces = self.load_embeddings(EMBEDDINGS_FILE)
 
     def load_embeddings(self, embeddings_file):
