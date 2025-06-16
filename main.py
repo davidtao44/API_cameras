@@ -5,7 +5,7 @@ import threading
 import time
 
 from app.config.firebase import initialize_firebase
-from app.endpoints import camera, stats
+from app.endpoints import camera, stats, access
 from app.services.firebase_service import monitor_firebase_visitors
 
 app = FastAPI()
@@ -22,6 +22,7 @@ app.add_middleware(
 # Incluir routers
 app.include_router(camera.router)
 app.include_router(stats.router)
+app.include_router(access.router)
 
 # Inicializar Firebase
 firebase_initialized = initialize_firebase()

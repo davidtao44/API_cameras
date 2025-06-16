@@ -13,7 +13,7 @@ def generate_stream(config, camera_id: str):
         frame_generator = stream_frames_without_auth(url)
     
     for frame in frame_generator:
-        frame, names = recognizer.recognize(frame)
+        frame, names = recognizer.recognize(frame, camera_id)
         
         for name in names:
             update_stats(camera_id, name)
