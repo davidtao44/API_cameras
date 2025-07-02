@@ -15,6 +15,9 @@ from services.access_service import access_service
 import aiohttp
 from queue import Queue
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry  # ✅ Agregar esta importación
 
 # EMBEDDINGS_FILE = "embeddings_arcface.json"
 EMBEDDINGS_FILE = r"C:/Users/jhona/Documents/Tecon/Camaras/embeddings_arcface.json"
@@ -77,15 +80,38 @@ class FaceRecognizer:
         self.processing_thread = threading.Thread(target=self._process_events, daemon=True)
         self.processing_thread.start()
         
+        # Optimización: Pool de conexiones reutilizables
+        self.session = requests.Session()
+        retry_strategy = Retry(
+            total=2,
+            backoff_factor=0.1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=1,
+            pool_maxsize=1
+        )
+        self.session.mount("http://", adapter)
+        
+        # Pool de hilos para operaciones de red
+        self.network_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="relay")
+        
+        # Cache de estado del relé para evitar peticiones innecesarias
+        self.relay_state_cache = {
+            'active': False,
+            'last_update': None
+        }
+        
         # Control de acceso automático
         self.relay_config = {
             "ip": "172.16.2.47",
             "relay_id": 0,
             "timeout": 0
         }
-        self.access_duration = 5
+        self.access_duration = 1
         self.last_relay_activation = None
-        self.cooldown_period = 10
+        self.cooldown_period = 20
         self.relay_active = False
         self.relay_timer = None
         self.relay_deactivation_time = None
@@ -130,39 +156,55 @@ class FaceRecognizer:
         time_since_last = (datetime.now() - self.last_relay_activation).total_seconds()
         return time_since_last < self.cooldown_period
 
-    def _activate_relay_sync(self):
-        """Activa el relé de forma síncrona usando requests"""
-        try:
-            url = "http://localhost:8000/relay/switch"
-            data = {
-                "ip": self.relay_config["ip"],
-                "relay_id": self.relay_config["relay_id"],
-                "state": True,
-                "timeout": self.relay_config["timeout"]
-            }
-            
-            response = requests.post(url, json=data, timeout=5)
-            if response.status_code == 200:
-                self.relay_active = True
-                print(f"🚪 Relé activado - Acceso concedido por {self.access_duration} segundos")
-                # Programar desactivación
-                self._schedule_relay_deactivation()
+    def _activate_relay_optimized(self):
+        """Versión optimizada de activación del relé - no bloquea el hilo principal"""
+        # Verificar cache antes de hacer petición
+        if self.relay_state_cache['active'] and self.relay_state_cache['last_update']:
+            time_diff = time.time() - self.relay_state_cache['last_update']
+            if time_diff < 1:  # Cache válido por 1 segundo
                 return True
-            else:
-                print(f"❌ Error al activar relé: {response.status_code}")
+        
+        def _make_request():
+            try:
+                url = "http://localhost:8000/relay/switch"
+                data = {
+                    "ip": self.relay_config["ip"],
+                    "relay_id": self.relay_config["relay_id"],
+                    "state": True,
+                    "timeout": self.relay_config["timeout"]
+                }
+                
+                # Usar session reutilizable con timeout corto
+                response = self.session.post(url, json=data, timeout=2)
+                
+                if response.status_code == 200:
+                    self.relay_active = True
+                    self.relay_state_cache = {
+                        'active': True,
+                        'last_update': time.time()
+                    }
+                    print(f"🚪 Relé activado - Acceso concedido por {self.access_duration} segundos")
+                    # Programar desactivación
+                    self._schedule_relay_deactivation_optimized()
+                    return True
+                else:
+                    print(f"❌ Error al activar relé: {response.status_code}")
+                    return False
+            except Exception as e:
+                print(f"❌ Error al activar relé: {str(e)}")
                 return False
-        except Exception as e:
-            print(f"❌ Error al activar relé: {str(e)}")
-            return False
+        
+        # Ejecutar en hilo separado para no bloquear GPU
+        future = self.network_executor.submit(_make_request)
+        return future
 
-    def _schedule_relay_deactivation(self):
-        """Programa la desactivación del relé después del tiempo especificado"""
+    def _schedule_relay_deactivation_optimized(self):
+        """Versión optimizada de desactivación del relé"""
         def deactivate_after_delay():
             try:
                 time.sleep(self.access_duration)
-                # Verificar si el relé sigue activo antes de desactivar
+                
                 if self.relay_active:
-                    # Usar requests síncronos
                     try:
                         url = "http://localhost:8000/relay/switch"
                         data = {
@@ -172,10 +214,15 @@ class FaceRecognizer:
                             "timeout": self.relay_config["timeout"]
                         }
                         
-                        response = requests.post(url, json=data, timeout=5)
+                        # Usar session reutilizable
+                        response = self.session.post(url, json=data, timeout=2)
+                        
                         if response.status_code == 200:
                             self.relay_active = False
-                            self.relay_deactivation_time = None
+                            self.relay_state_cache = {
+                                'active': False,
+                                'last_update': time.time()
+                            }
                             print(f"🔒 Relé desactivado - Acceso cerrado")
                         else:
                             print(f"❌ Error al desactivar relé: {response.status_code}")
@@ -183,47 +230,114 @@ class FaceRecognizer:
                         print(f"❌ Error al desactivar relé: {str(e)}")
             except Exception as e:
                 print(f"❌ Error en desactivación programada: {str(e)}")
-            
+        
         # Cancelar timer anterior si existe
         if hasattr(self, 'relay_timer') and self.relay_timer and self.relay_timer.is_alive():
             self.relay_timer.cancel()
-            
-        self.relay_timer = threading.Timer(self.access_duration, deactivate_after_delay)
+        
+        # Ejecutar desactivación en el pool de hilos
+        self.relay_timer = threading.Timer(0, lambda: self.network_executor.submit(deactivate_after_delay))
         self.relay_timer.start()
 
-    def _all_faces_recognized(self, detected_names: list) -> bool:
-        """Verifica si todos los rostros detectados son reconocidos"""
-        if not detected_names:
-            return False
-            
-        # Todos los rostros deben ser reconocidos (no "Desconocido")
-        return all(name != "Desconocido" for name in detected_names)
-
-    def _process_access_control(self, detected_names: list, camera_id: str):
-        """Procesa el control de acceso automático"""
+    def _process_access_control_optimized(self, detected_names: list, camera_id: str):
+        """Versión optimizada del control de acceso - no bloquea GPU"""
         if not detected_names:
             return
+        
+        # Verificaciones rápidas primero (sin I/O)
+        if not self._all_faces_recognized(detected_names):
+            return
             
-        # Verificar si todos los rostros son reconocidos
-        if self._all_faces_recognized(detected_names):
-            # Verificar período de enfriamiento
-            if self._is_in_cooldown():
-                return
-                
-            # Verificar si el relé ya está activo
-            if self.relay_active:
-                return
+        if self._is_in_cooldown():
+            return
             
-            print(f"🎯 Todos los rostros reconocidos: {detected_names}")
+        if self.relay_active:
+            return
+        
+        print(f"🎯 Todos los rostros reconocidos: {detected_names}")
+        
+        # Activar relé de forma no bloqueante
+        future = self._activate_relay_optimized()
+        self.last_relay_activation = datetime.now()
+        
+        # Opcional: verificar resultado sin bloquear
+        def check_result():
+            try:
+                result = future.result(timeout=0.1)  # Timeout muy corto
+                if not result:
+                    print("⚠️ Activación del relé falló")
+            except:
+                pass  # No bloquear si la petición aún está en curso
+        
+        # Verificar resultado en hilo separado
+        threading.Thread(target=check_result, daemon=True).start()
+
+    def recognize(self, img, camera_id: str) -> Tuple[np.ndarray, list]:
+        """Versión optimizada del reconocimiento - prioriza GPU"""
+        # Configurar región de detección si no está configurada
+        if self.region_height is None:
+            self.set_detection_region(img.shape[0])
+
+        # Dibujar elementos UI (operaciones rápidas)
+        cv2.line(img, (0, self.entry_line_y), (img.shape[1], self.entry_line_y), (0, 255, 0), 2)
+        cv2.line(img, (0, self.exit_line_y), (img.shape[1], self.exit_line_y), (0, 0, 255), 2)
+        cv2.putText(img, "Entrada", (10, self.entry_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        cv2.putText(img, "Salida", (10, self.exit_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+        # Estado del relé (usar cache para evitar bloqueos)
+        relay_status = "🟢 ACTIVO" if self.relay_active else "🔴 INACTIVO"
+        cv2.putText(img, f"Rele: {relay_status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+        # PROCESAMIENTO GPU - Esta es la parte crítica que no debe bloquearse
+        faces = self.app.get(img)
+        detected_names = []
+        
+        # Procesamiento de caras (mantener en hilo principal para GPU)
+        for face in faces:
+            match_name = "Desconocido"
+            max_sim = -1
             
-            # Activar relé de forma síncrona en un hilo separado
-            def activate_relay_thread():
-                self._activate_relay_sync()
-                
-            threading.Thread(target=activate_relay_thread, daemon=True).start()
-            self.last_relay_activation = datetime.now()
-                
-        return
+            # Optimización: usar numpy vectorizado cuando sea posible
+            for name, embeddings in self.known_faces.items():
+                for known_embedding in embeddings:
+                    sim = self.calculate_similarity(face.embedding, known_embedding)
+                    if sim > THRESHOLD and sim > max_sim:
+                        match_name = name
+                        max_sim = sim
+
+            detected_names.append(match_name)
+            
+            # Logging de acceso (operación rápida)
+            current_y = face.bbox[1]
+            person_id = f"{match_name}_{face.bbox[0]}"
+            event_type = self.determine_movement(person_id, current_y)
+            
+            if event_type and match_name != "Desconocido":
+                self.log_access(
+                    person_id=person_id,
+                    name=match_name,
+                    event_type=event_type,
+                    camera_id=camera_id,
+                    confidence=max_sim
+                )
+            
+            # Dibujar resultados
+            x1, y1, x2, y2 = face.bbox.astype(int)
+            color = (0, 255, 0) if match_name != "Desconocido" else (0, 0, 255)
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Control de acceso optimizado (no bloquea GPU)
+        self._process_access_control_optimized(detected_names, camera_id)
+        
+        return img, detected_names
+
+    def __del__(self):
+        """Cleanup al destruir el objeto"""
+        if hasattr(self, 'session'):
+            self.session.close()
+        if hasattr(self, 'network_executor'):
+            self.network_executor.shutdown(wait=False)
 
     def _all_faces_recognized(self, detected_names: list) -> bool:
         """Verifica si todos los rostros detectados son reconocidos"""
@@ -307,63 +421,6 @@ class FaceRecognizer:
             return "EXIT"
         
         return None
-
-    def recognize(self, img, camera_id: str) -> Tuple[np.ndarray, list]:
-        """Reconoce caras en la imagen y registra entradas/salidas"""
-        # Configurar región de detección si no está configurada
-        if self.region_height is None:
-            self.set_detection_region(img.shape[0])
-
-        # Dibujar líneas de entrada y salida
-        cv2.line(img, (0, self.entry_line_y), (img.shape[1], self.entry_line_y), (0, 255, 0), 2)
-        cv2.line(img, (0, self.exit_line_y), (img.shape[1], self.exit_line_y), (0, 0, 255), 2)
-        cv2.putText(img, "Entrada", (10, self.entry_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        cv2.putText(img, "Salida", (10, self.exit_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-
-        # Mostrar estado del relé en la imagen
-        relay_status = "🟢 ACTIVO" if self.relay_active else "🔴 INACTIVO"
-        cv2.putText(img, f"Rele: {relay_status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
-        faces = self.app.get(img)
-        detected_names = []
-        
-        for face in faces:
-            match_name = "Desconocido"
-            max_sim = -1
-            for name, embeddings in self.known_faces.items():
-                for known_embedding in embeddings:
-                    sim = self.calculate_similarity(face.embedding, known_embedding)
-                    if sim > THRESHOLD and sim > max_sim:
-                        match_name = name
-                        max_sim = sim
-
-            detected_names.append(match_name)
-            
-            # Determinar movimiento basado en la posición actual
-            current_y = face.bbox[1]  # Coordenada Y del rostro
-            person_id = f"{match_name}_{face.bbox[0]}"  # ID único basado en nombre y posición X
-            event_type = self.determine_movement(person_id, current_y)
-            
-            # Registrar acceso si se detectó una posición válida
-            if event_type and match_name != "Desconocido":
-                self.log_access(
-                    person_id=person_id,
-                    name=match_name,
-                    event_type=event_type,
-                    camera_id=camera_id,
-                    confidence=max_sim
-                )
-            
-            # Draw box
-            x1, y1, x2, y2 = face.bbox.astype(int)
-            color = (0, 255, 0) if match_name != "Desconocido" else (0, 0, 255)
-            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        
-        # Procesar control de acceso automático
-        self._process_access_control(detected_names, camera_id)
-        
-        return img, detected_names
 
 recognizer = FaceRecognizer()
 
