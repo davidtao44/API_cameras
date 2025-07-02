@@ -4,9 +4,9 @@ import os
 import time
 import numpy as np
 from datetime import datetime
-from app.config.firebase import db
-from app.utils.normalizers import normalize_text
-from app.services.camera_stream import recognizer
+from config.firebase import db
+from utils.normalizers import normalize_text
+from services.camera_stream import recognizer
 import cv2
 
 # Variable para almacenar los últimos documentos procesados

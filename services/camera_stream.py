@@ -11,29 +11,83 @@ import time
 from typing import Tuple
 from datetime import datetime
 import asyncio
-from app.services.access_service import access_service
+from services.access_service import access_service
 import aiohttp
 from queue import Queue
 import threading
 
-EMBEDDINGS_FILE = "embeddings_arcface.json"
+# EMBEDDINGS_FILE = "embeddings_arcface.json"
+EMBEDDINGS_FILE = r"C:/Users/jhona/Documents/Tecon/Camaras/embeddings_arcface.json"
 THRESHOLD = 0.5
 MOVEMENT_THRESHOLD = 50  # Umbral para detectar movimiento
 
 class FaceRecognizer:
     def __init__(self):
-        self.app = FaceAnalysis(providers=['CUDAExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(640, 640))
+        # Verificar proveedores disponibles y configurar GPU
+        try:
+            import onnxruntime as ort
+            available_providers = ort.get_available_providers()
+            print(f"🔍 Proveedores ONNX disponibles: {available_providers}")
+            
+            # Configurar proveedores en orden de preferencia
+            providers = []
+            if 'CUDAExecutionProvider' in available_providers:
+                providers.append(('CUDAExecutionProvider', {
+                    'device_id': 0,
+                    'arena_extend_strategy': 'kNextPowerOfTwo',
+                    'gpu_mem_limit': 2 * 1024 * 1024 * 1024,  # 2GB
+                    'cudnn_conv_algo_search': 'EXHAUSTIVE',
+                    'do_copy_in_default_stream': True,
+                }))
+                print("✅ Configurando CUDA para GPU")
+            
+            if 'CPUExecutionProvider' in available_providers:
+                providers.append('CPUExecutionProvider')
+                print("✅ CPU como respaldo disponible")
+            
+            if not providers:
+                providers = ['CPUExecutionProvider']
+                print("⚠️ Solo CPU disponible")
+            
+            self.app = FaceAnalysis(providers=providers)
+            
+            # Configurar contexto GPU si está disponible
+            if 'CUDAExecutionProvider' in [p[0] if isinstance(p, tuple) else p for p in providers]:
+                self.app.prepare(ctx_id=0, det_size=(640, 640))
+                print("🚀 InsightFace configurado con GPU")
+            else:
+                self.app.prepare(ctx_id=-1, det_size=(320, 320))  # Tamaño menor para CPU
+                print("🐌 InsightFace configurado con CPU (tamaño reducido)")
+                
+        except Exception as e:
+            print(f"❌ Error configurando InsightFace: {str(e)}")
+            # Fallback a CPU
+            self.app = FaceAnalysis(providers=['CPUExecutionProvider'])
+            self.app.prepare(ctx_id=-1, det_size=(320, 320))
+            print("🔄 Usando CPU como respaldo")
+        
         self.known_faces = self.load_embeddings(EMBEDDINGS_FILE)
-        self.previous_positions = {}  # Almacena posiciones anteriores de personas
-        self.last_detection_time = {}  # Almacena el último tiempo de detección por persona
-        self.entry_line_y = None  # Línea de entrada
-        self.exit_line_y = None   # Línea de salida
-        self.region_height = None # Altura de la región de detección
+        self.previous_positions = {}
+        self.last_detection_time = {}
+        self.entry_line_y = None
+        self.exit_line_y = None
+        self.region_height = None
         self._session = None
         self.event_queue = Queue()
         self.processing_thread = threading.Thread(target=self._process_events, daemon=True)
         self.processing_thread.start()
+        
+        # Control de acceso automático
+        self.relay_config = {
+            "ip": "172.16.2.47",
+            "relay_id": 0,
+            "timeout": 5
+        }
+        self.access_duration = 5
+        self.last_relay_activation = None
+        self.cooldown_period = 10
+        self.relay_active = False
+        self.relay_timer = None
 
     def _process_events(self):
         """Procesa eventos de la cola en un hilo separado"""
@@ -59,6 +113,111 @@ class FaceRecognizer:
                     print(f"❌ Error al registrar {event['event_type']} para {event['name']}: {response.status}")
         except Exception as e:
             print(f"❌ Error al enviar evento: {str(e)}")
+
+    async def _activate_relay(self):
+        """Activa el relé usando el endpoint existente"""
+        try:
+            if self._session is None:
+                self._session = aiohttp.ClientSession()
+            
+            url = "http://localhost:8000/relay/switch"
+            data = {
+                "ip": self.relay_config["ip"],
+                "relay_id": self.relay_config["relay_id"],
+                "state": True,
+                "timeout": self.relay_config["timeout"]
+            }
+            
+            async with self._session.post(url, json=data) as response:
+                if response.status == 200:
+                    self.relay_active = True
+                    print(f"🚪 Relé activado - Acceso concedido por {self.access_duration} segundos")
+                    self._schedule_relay_deactivation()
+                    return True
+                else:
+                    print(f"❌ Error al activar relé: {response.status}")
+                    return False
+        except Exception as e:
+            print(f"❌ Error al activar relé: {str(e)}")
+            return False
+
+    async def _deactivate_relay(self):
+        """Desactiva el relé usando el endpoint existente"""
+        try:
+            if self._session is None:
+                self._session = aiohttp.ClientSession()
+            
+            url = "http://localhost:8000/relay/switch"
+            data = {
+                "ip": self.relay_config["ip"],
+                "relay_id": self.relay_config["relay_id"],
+                "state": False,
+                "timeout": self.relay_config["timeout"]
+            }
+            
+            async with self._session.post(url, json=data) as response:
+                if response.status == 200:
+                    self.relay_active = False
+                    print(f"🔒 Relé desactivado - Acceso cerrado")
+                    return True
+                else:
+                    print(f"❌ Error al desactivar relé: {response.status}")
+                    return False
+        except Exception as e:
+            print(f"❌ Error al desactivar relé: {str(e)}")
+            return False
+
+    def _schedule_relay_deactivation(self):
+        """Programa la desactivación del relé después del tiempo especificado"""
+        def deactivate_after_delay():
+            time.sleep(self.access_duration)
+            asyncio.run(self._deactivate_relay())
+            
+        if self.relay_timer:
+            self.relay_timer.cancel()
+            
+        self.relay_timer = threading.Timer(self.access_duration, deactivate_after_delay)
+        self.relay_timer.start()
+
+    def _is_in_cooldown(self) -> bool:
+        """Verifica si estamos en período de enfriamiento"""
+        if self.last_relay_activation is None:
+            return False
+            
+        time_since_last = (datetime.now() - self.last_relay_activation).total_seconds()
+        return time_since_last < self.cooldown_period
+
+    def _all_faces_recognized(self, detected_names: list) -> bool:
+        """Verifica si todos los rostros detectados son reconocidos"""
+        if not detected_names:
+            return False
+            
+        # Todos los rostros deben ser reconocidos (no "Desconocido")
+        return all(name != "Desconocido" for name in detected_names)
+
+    def _process_access_control(self, detected_names: list, camera_id: str):
+        """Procesa el control de acceso automático"""
+        if not detected_names:
+            return
+            
+        # Verificar si todos los rostros son reconocidos
+        if self._all_faces_recognized(detected_names):
+            # Verificar período de enfriamiento
+            if self._is_in_cooldown():
+                return
+                
+            # Verificar si el relé ya está activo
+            if self.relay_active:
+                return
+            
+            print(f"🎯 Todos los rostros reconocidos: {detected_names}")
+            
+            # Activar relé de forma asíncrona
+            def activate_relay_async():
+                asyncio.run(self._activate_relay())
+                
+            threading.Thread(target=activate_relay_async, daemon=True).start()
+            self.last_relay_activation = datetime.now()
 
     def load_embeddings(self, embeddings_file):
         """Carga los embeddings desde un archivo JSON"""
@@ -147,6 +306,10 @@ class FaceRecognizer:
         cv2.putText(img, "Entrada", (10, self.entry_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         cv2.putText(img, "Salida", (10, self.exit_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
+        # Mostrar estado del relé en la imagen
+        relay_status = "🟢 ACTIVO" if self.relay_active else "🔴 INACTIVO"
+        cv2.putText(img, f"Rele: {relay_status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
         faces = self.app.get(img)
         detected_names = []
         
@@ -182,6 +345,9 @@ class FaceRecognizer:
             color = (0, 255, 0) if match_name != "Desconocido" else (0, 0, 255)
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Procesar control de acceso automático
+        self._process_access_control(detected_names, camera_id)
         
         return img, detected_names
 

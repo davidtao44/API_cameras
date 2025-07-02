@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Response
 from typing import List
-from app.models.access_log import AccessLog, AccessLogResponse
-from app.services.access_service import access_service
+from models.access_log import AccessLog, AccessLogResponse
+from services.access_service import access_service
 
 router = APIRouter(prefix="/access", tags=["access"])
 
@@ -22,4 +22,4 @@ async def get_person_logs(person_id: str):
 @router.get("/current", response_model=List[AccessLogResponse])
 async def get_current_people():
     """Obtiene la lista de personas que están actualmente en el recinto"""
-    return await access_service.get_current_people() 
+    return await access_service.get_current_people()

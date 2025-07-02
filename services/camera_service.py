@@ -1,6 +1,6 @@
 import cv2
-from app.services.stats_service import update_stats
-from app.services.camera_stream import stream_frames_with_digest, stream_frames_without_auth, recognizer
+from services.stats_service import update_stats
+from services.camera_stream import stream_frames_with_digest, stream_frames_without_auth, recognizer
 
 def generate_stream(config, camera_id: str):
     url = config["url"]

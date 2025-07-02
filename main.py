@@ -3,10 +3,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import threading
 import time
-
-from app.config.firebase import initialize_firebase
-from app.endpoints import camera, stats, access
-from app.services.firebase_service import monitor_firebase_visitors
+from config.firebase import initialize_firebase
+from endpoints import camera, stats, access, relay
+from services.firebase_service import monitor_firebase_visitors
 
 app = FastAPI()
 
@@ -23,6 +22,7 @@ app.add_middleware(
 app.include_router(camera.router)
 app.include_router(stats.router)
 app.include_router(access.router)
+app.include_router(relay.router)
 
 # Inicializar Firebase
 firebase_initialized = initialize_firebase()
