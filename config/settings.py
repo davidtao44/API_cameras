@@ -44,7 +44,7 @@ CAMERAS = {
     },
 
     "cam8": {
-        "url": "http://172.16.2.231:8080/NxjRXXU0vFm9fklpQqDbmbz4LBxcnq/mjpeg/wcWasVvhGm/h0An7GvSqg",
+        "url": "http://172.16.2.231:8080/NxjRXXU0vFm9fklpQqDbmbz4LBxcnq/mjpeg/wcWasVvhGm/79YVnwoDVg",
         "username": "admin",
         "password": "Tecon2025#",
         "auth_required": False
