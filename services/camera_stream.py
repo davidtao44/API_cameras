@@ -81,24 +81,32 @@ class FaceRecognizer:
         self.relay_config = {
             "ip": "172.16.2.47",
             "relay_id": 0,
-            "timeout": 5
+            "timeout": 0
         }
         self.access_duration = 5
         self.last_relay_activation = None
         self.cooldown_period = 10
         self.relay_active = False
         self.relay_timer = None
+        self.relay_deactivation_time = None
 
     def _process_events(self):
         """Procesa eventos de la cola en un hilo separado"""
-        while True:
-            try:
-                event = self.event_queue.get()
-                if event:
-                    asyncio.run(self._send_event(event))
-                time.sleep(0.1)  # Pequeña pausa para no sobrecargar la CPU
-            except Exception as e:
-                print(f"Error procesando evento: {str(e)}")
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            while True:
+                try:
+                    event = self.event_queue.get(timeout=1)
+                    if event:
+                        loop.run_until_complete(self._send_event(event))
+                except:
+                    continue
+        except Exception as e:
+            print(f"Error procesando evento: {str(e)}")
+        finally:
+            loop.close()
 
     async def _send_event(self, event):
         """Envía el evento al servidor"""
@@ -114,12 +122,17 @@ class FaceRecognizer:
         except Exception as e:
             print(f"❌ Error al enviar evento: {str(e)}")
 
-    async def _activate_relay(self):
-        """Activa el relé usando el endpoint existente"""
+    def _is_in_cooldown(self) -> bool:
+        """Verifica si el sistema está en período de enfriamiento"""
+        if self.last_relay_activation is None:
+            return False
+        
+        time_since_last = (datetime.now() - self.last_relay_activation).total_seconds()
+        return time_since_last < self.cooldown_period
+
+    def _activate_relay_sync(self):
+        """Activa el relé de forma síncrona usando requests"""
         try:
-            if self._session is None:
-                self._session = aiohttp.ClientSession()
-            
             url = "http://localhost:8000/relay/switch"
             data = {
                 "ip": self.relay_config["ip"],
@@ -128,64 +141,55 @@ class FaceRecognizer:
                 "timeout": self.relay_config["timeout"]
             }
             
-            async with self._session.post(url, json=data) as response:
-                if response.status == 200:
-                    self.relay_active = True
-                    print(f"🚪 Relé activado - Acceso concedido por {self.access_duration} segundos")
-                    self._schedule_relay_deactivation()
-                    return True
-                else:
-                    print(f"❌ Error al activar relé: {response.status}")
-                    return False
+            response = requests.post(url, json=data, timeout=5)
+            if response.status_code == 200:
+                self.relay_active = True
+                print(f"🚪 Relé activado - Acceso concedido por {self.access_duration} segundos")
+                # Programar desactivación
+                self._schedule_relay_deactivation()
+                return True
+            else:
+                print(f"❌ Error al activar relé: {response.status_code}")
+                return False
         except Exception as e:
             print(f"❌ Error al activar relé: {str(e)}")
-            return False
-
-    async def _deactivate_relay(self):
-        """Desactiva el relé usando el endpoint existente"""
-        try:
-            if self._session is None:
-                self._session = aiohttp.ClientSession()
-            
-            url = "http://localhost:8000/relay/switch"
-            data = {
-                "ip": self.relay_config["ip"],
-                "relay_id": self.relay_config["relay_id"],
-                "state": False,
-                "timeout": self.relay_config["timeout"]
-            }
-            
-            async with self._session.post(url, json=data) as response:
-                if response.status == 200:
-                    self.relay_active = False
-                    print(f"🔒 Relé desactivado - Acceso cerrado")
-                    return True
-                else:
-                    print(f"❌ Error al desactivar relé: {response.status}")
-                    return False
-        except Exception as e:
-            print(f"❌ Error al desactivar relé: {str(e)}")
             return False
 
     def _schedule_relay_deactivation(self):
         """Programa la desactivación del relé después del tiempo especificado"""
         def deactivate_after_delay():
-            time.sleep(self.access_duration)
-            asyncio.run(self._deactivate_relay())
+            try:
+                time.sleep(self.access_duration)
+                # Verificar si el relé sigue activo antes de desactivar
+                if self.relay_active:
+                    # Usar requests síncronos
+                    try:
+                        url = "http://localhost:8000/relay/switch"
+                        data = {
+                            "ip": self.relay_config["ip"],
+                            "relay_id": self.relay_config["relay_id"],
+                            "state": False,
+                            "timeout": self.relay_config["timeout"]
+                        }
+                        
+                        response = requests.post(url, json=data, timeout=5)
+                        if response.status_code == 200:
+                            self.relay_active = False
+                            self.relay_deactivation_time = None
+                            print(f"🔒 Relé desactivado - Acceso cerrado")
+                        else:
+                            print(f"❌ Error al desactivar relé: {response.status_code}")
+                    except Exception as e:
+                        print(f"❌ Error al desactivar relé: {str(e)}")
+            except Exception as e:
+                print(f"❌ Error en desactivación programada: {str(e)}")
             
-        if self.relay_timer:
+        # Cancelar timer anterior si existe
+        if hasattr(self, 'relay_timer') and self.relay_timer and self.relay_timer.is_alive():
             self.relay_timer.cancel()
             
         self.relay_timer = threading.Timer(self.access_duration, deactivate_after_delay)
         self.relay_timer.start()
-
-    def _is_in_cooldown(self) -> bool:
-        """Verifica si estamos en período de enfriamiento"""
-        if self.last_relay_activation is None:
-            return False
-            
-        time_since_last = (datetime.now() - self.last_relay_activation).total_seconds()
-        return time_since_last < self.cooldown_period
 
     def _all_faces_recognized(self, detected_names: list) -> bool:
         """Verifica si todos los rostros detectados son reconocidos"""
@@ -212,12 +216,22 @@ class FaceRecognizer:
             
             print(f"🎯 Todos los rostros reconocidos: {detected_names}")
             
-            # Activar relé de forma asíncrona
-            def activate_relay_async():
-                asyncio.run(self._activate_relay())
+            # Activar relé de forma síncrona en un hilo separado
+            def activate_relay_thread():
+                self._activate_relay_sync()
                 
-            threading.Thread(target=activate_relay_async, daemon=True).start()
+            threading.Thread(target=activate_relay_thread, daemon=True).start()
             self.last_relay_activation = datetime.now()
+                
+        return
+
+    def _all_faces_recognized(self, detected_names: list) -> bool:
+        """Verifica si todos los rostros detectados son reconocidos"""
+        if not detected_names:
+            return False
+            
+        # Todos los rostros deben ser reconocidos (no "Desconocido")
+        return all(name != "Desconocido" for name in detected_names)
 
     def load_embeddings(self, embeddings_file):
         """Carga los embeddings desde un archivo JSON"""
