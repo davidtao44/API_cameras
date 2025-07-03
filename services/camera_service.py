@@ -1,6 +1,6 @@
 import cv2
 from services.stats_service import update_stats
-from services.camera_stream import stream_frames_with_digest, stream_frames_without_auth, recognizer
+from services.camera_stream import stream_frames_with_digest, stream_frames_without_auth, stream_recognizer
 
 def generate_stream(config, camera_id: str):
     url = config["url"]
@@ -13,7 +13,8 @@ def generate_stream(config, camera_id: str):
         frame_generator = stream_frames_without_auth(url)
     
     for frame in frame_generator:
-        frame, names = recognizer.recognize(frame, camera_id)
+        # Usar el recognizer simplificado solo para streaming
+        frame, names = stream_recognizer.recognize_for_stream(frame)
         
         for name in names:
             update_stats(camera_id, name)

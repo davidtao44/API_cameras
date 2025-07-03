@@ -4,8 +4,9 @@ import uvicorn
 import threading
 import time
 from config.firebase import initialize_firebase
-from endpoints import camera, stats, access, relay, access_control  # ✅ Agregar access_control
+from endpoints import camera, stats, access, relay, access_control
 from services.firebase_service import monitor_firebase_visitors
+from services.surveillance_service import surveillance_service  # ✅ Agregar import
 
 app = FastAPI()
 
@@ -40,6 +41,16 @@ if __name__ == "__main__":
         kwargs={"firebase_initialized": firebase_initialized}
     )
     firebase_monitor_thread.start()
+    
+    # ✅ Iniciar el monitoreo automático de surveillance para cam1
+    surveillance_thread = threading.Thread(
+        target=surveillance_service.start_monitoring,
+        args=("cam2",),
+        daemon=True,
+        name="surveillance_cam1"
+    )
+    surveillance_thread.start()
+    print("🎥 Iniciando surveillance automático para cam1")
     
     # Iniciar el servidor FastAPI
     uvicorn.run(app, host="0.0.0.0", port=8000)

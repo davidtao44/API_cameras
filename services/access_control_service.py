@@ -12,11 +12,12 @@ class AccessControlService:
             "relay_ip": "172.16.2.47",
             "relay_id": 0,
             "access_duration": 5,
-            "cooldown_period": 20,
+            "cooldown_period": 5,
             "require_all_faces_known": True
         }
         self.last_activation = None
         self.relay_active = False
+        self.processing_request = False  # Nuevo estado para evitar solicitudes múltiples
         self.relay_timer = None
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="access_control")
         
@@ -36,14 +37,25 @@ class AccessControlService:
         if self.relay_active:
             return self._create_response(True, False, "Acceso ya activo", detected_names)
         
-        # Conceder acceso
-        success = await self._activate_relay()
-        if success:
-            self.last_activation = timestamp
-            return self._create_response(True, True, f"Acceso concedido por {self.config['access_duration']}s", detected_names)
-        else:
-            return self._create_response(False, False, "Error al activar relé", detected_names)
-    
+        # Nueva verificación: evitar solicitudes múltiples
+        if self.processing_request:
+            return self._create_response(False, False, "Procesando solicitud anterior", detected_names)
+        
+        # Marcar como procesando
+        self.processing_request = True
+        
+        try:
+            # Conceder acceso
+            success = await self._activate_relay()
+            if success:
+                self.last_activation = timestamp
+                return self._create_response(True, True, f"Acceso concedido por {self.config['access_duration']}s", detected_names)
+            else:
+                return self._create_response(False, False, "Error al activar relé", detected_names)
+        finally:
+            # Liberar el estado de procesamiento
+            self.processing_request = False
+
     def _create_response(self, access_granted: bool, relay_activated: bool, message: str, detected_names: List[str]) -> Dict:
         return {
             "access_granted": access_granted,
@@ -132,6 +144,7 @@ class AccessControlService:
     async def get_status(self) -> Dict:
         return {
             "relay_active": self.relay_active,
+            "processing_request": self.processing_request,  # Incluir en el estado
             "last_activation": self.last_activation.isoformat() if self.last_activation else None,
             "in_cooldown": self._is_in_cooldown(),
             "cooldown_remaining": self._get_cooldown_remaining(),

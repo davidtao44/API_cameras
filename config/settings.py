@@ -47,5 +47,11 @@ CAMERAS = {
         "username": "admin",
         "password": "Tecon2025#",
         "auth_required": False
+    },
+    "cam2": {
+        "url": "http://172.16.2.231:8080/NxjRXXU0vFm9fklpQqDbmbz4LBxcnq/mjpeg/wcWasVvhGm/A5vjFix0zS",
+        "username": "admin",
+        "password": "Tecon2025#",
+        "auth_required": False
     }
 }
