@@ -13,16 +13,22 @@ class AccessControlService:
             "relay_id": 0,
             "access_duration": 5,
             "cooldown_period": 20,
-            "require_all_faces_known": True
+            "require_all_faces_known": True,
+            "detection_wait_time": 3,  # Nuevo: tiempo de espera para detectar múltiples personas
+            "min_detections_for_activation": 1  # Nuevo: mínimo de detecciones antes de evaluar
         }
         self.last_activation = None
         self.relay_active = False
         self.relay_timer = None
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="access_control")
         
+        # Nuevos atributos para manejo de detecciones múltiples
+        self.pending_detections = {}  # {camera_id: {"names": [], "timestamp": datetime, "timer": Timer}}
+        self.detection_lock = threading.Lock()
+        
     async def evaluate_access(self, camera_id: str, detected_names: List[str], timestamp: datetime) -> Dict:
-        """Evalúa si se debe conceder acceso"""
-        # Verificaciones de seguridad
+        """Evalúa si se debe conceder acceso con tiempo de espera para múltiples personas"""
+        # Verificaciones de seguridad básicas
         if not detected_names:
             return self._create_response(False, False, "No se detectaron rostros", detected_names)
             
@@ -36,13 +42,85 @@ class AccessControlService:
         if self.relay_active:
             return self._create_response(True, False, "Acceso ya activo", detected_names)
         
-        # Conceder acceso
+        # Manejar detecciones con tiempo de espera
+        return await self._handle_detection_with_wait(camera_id, detected_names, timestamp)
+    
+    async def _handle_detection_with_wait(self, camera_id: str, detected_names: List[str], timestamp: datetime) -> Dict:
+        """Maneja las detecciones con tiempo de espera para múltiples personas"""
+        with self.detection_lock:
+            # Si ya hay una detección pendiente para esta cámara
+            if camera_id in self.pending_detections:
+                # Actualizar la lista de nombres detectados (sin duplicados)
+                current_names = self.pending_detections[camera_id]["names"]
+                for name in detected_names:
+                    if name not in current_names:
+                        current_names.append(name)
+                
+                self.pending_detections[camera_id]["names"] = current_names
+                self.pending_detections[camera_id]["timestamp"] = timestamp
+                
+                return self._create_response(
+                    False, False, 
+                    f"Esperando más detecciones... ({len(current_names)} personas detectadas)", 
+                    current_names
+                )
+            else:
+                # Primera detección para esta cámara
+                self.pending_detections[camera_id] = {
+                    "names": detected_names.copy(),
+                    "timestamp": timestamp,
+                    "timer": None
+                }
+                
+                # Programar evaluación después del tiempo de espera
+                timer = threading.Timer(
+                    self.config["detection_wait_time"],
+                    self._evaluate_pending_detection,
+                    args=[camera_id]
+                )
+                timer.start()
+                self.pending_detections[camera_id]["timer"] = timer
+                
+                return self._create_response(
+                    False, False, 
+                    f"Primera detección registrada. Esperando {self.config['detection_wait_time']}s por más personas...", 
+                    detected_names
+                )
+    
+    def _evaluate_pending_detection(self, camera_id: str):
+        """Evalúa las detecciones pendientes después del tiempo de espera"""
+        with self.detection_lock:
+            if camera_id not in self.pending_detections:
+                return
+            
+            detection_data = self.pending_detections[camera_id]
+            detected_names = detection_data["names"]
+            timestamp = detection_data["timestamp"]
+            
+            # Limpiar la detección pendiente
+            del self.pending_detections[camera_id]
+        
+        # Evaluar si se debe activar el relé
+        num_people = len(detected_names)
+        print(f"🔍 Evaluando acceso final: {num_people} personas detectadas: {detected_names}")
+        
+        # Verificar si hay suficientes personas conocidas
+        known_people = [name for name in detected_names if name != "Desconocido"]
+        
+        if len(known_people) >= self.config["min_detections_for_activation"]:
+            # Activar relé de forma asíncrona
+            asyncio.run(self._activate_relay_final(detected_names, timestamp))
+        else:
+            print(f"⚠️ No se activó el relé: solo {len(known_people)} personas conocidas (mínimo: {self.config['min_detections_for_activation']})")
+    
+    async def _activate_relay_final(self, detected_names: List[str], timestamp: datetime):
+        """Activa el relé después de la evaluación final"""
         success = await self._activate_relay()
         if success:
             self.last_activation = timestamp
-            return self._create_response(True, True, f"Acceso concedido por {self.config['access_duration']}s", detected_names)
+            print(f"✅ Acceso concedido para {len(detected_names)} personas: {detected_names}")
         else:
-            return self._create_response(False, False, "Error al activar relé", detected_names)
+            print(f"❌ Error al activar relé para: {detected_names}")
     
     def _create_response(self, access_granted: bool, relay_activated: bool, message: str, detected_names: List[str]) -> Dict:
         return {
@@ -130,16 +208,35 @@ class AccessControlService:
         self.config.update(new_config)
     
     async def get_status(self) -> Dict:
+        with self.detection_lock:
+            pending_info = {
+                camera_id: {
+                    "names": data["names"],
+                    "timestamp": data["timestamp"].isoformat(),
+                    "waiting": True
+                }
+                for camera_id, data in self.pending_detections.items()
+            }
+        
         return {
             "relay_active": self.relay_active,
             "last_activation": self.last_activation.isoformat() if self.last_activation else None,
             "in_cooldown": self._is_in_cooldown(),
             "cooldown_remaining": self._get_cooldown_remaining(),
+            "pending_detections": pending_info,
             "config": self.config
         }
     
     async def manual_override(self, activate: bool, duration: Optional[int] = None) -> Dict:
         """Activación/desactivación manual del relé"""
+        # Cancelar detecciones pendientes en caso de override manual
+        if activate:
+            with self.detection_lock:
+                for camera_id, data in self.pending_detections.items():
+                    if data["timer"]:
+                        data["timer"].cancel()
+                self.pending_detections.clear()
+        
         if activate:
             if duration:
                 old_duration = self.config["access_duration"]
