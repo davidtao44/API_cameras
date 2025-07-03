@@ -14,6 +14,7 @@ def initialize_firebase():
         
     try:
         cred_path = r"/home/tecon/Documentos/Camara/server_video/keys/serviceAccountKey.json"
+        #cred_path = r"C:/Users/jhona/Documents/Tecon/Camaras/Credenciales_Firebase.json"
         cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(cred)
         _firebase_initialized = True

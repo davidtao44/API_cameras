@@ -3,10 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import threading
 import time
-
-from app.config.firebase import initialize_firebase
-from app.endpoints import camera, stats, access
-from app.services.firebase_service import monitor_firebase_visitors
+from config.firebase import initialize_firebase
+from endpoints import camera, stats, access, relay, access_control
+from services.firebase_service import monitor_firebase_visitors
+from services.surveillance_service import surveillance_service  # ✅ Agregar import
 
 app = FastAPI()
 
@@ -23,6 +23,8 @@ app.add_middleware(
 app.include_router(camera.router)
 app.include_router(stats.router)
 app.include_router(access.router)
+app.include_router(relay.router)
+app.include_router(access_control.router)  # ✅ Agregar el nuevo router
 
 # Inicializar Firebase
 firebase_initialized = initialize_firebase()
@@ -39,6 +41,16 @@ if __name__ == "__main__":
         kwargs={"firebase_initialized": firebase_initialized}
     )
     firebase_monitor_thread.start()
+    
+    # ✅ Iniciar el monitoreo automático de surveillance para cam1
+    surveillance_thread = threading.Thread(
+        target=surveillance_service.start_monitoring,
+        args=("cam2",),
+        daemon=True,
+        name="surveillance_cam1"
+    )
+    surveillance_thread.start()
+    print("🎥 Iniciando surveillance automático para cam1")
     
     # Iniciar el servidor FastAPI
     uvicorn.run(app, host="0.0.0.0", port=8000)

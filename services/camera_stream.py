@@ -4,61 +4,100 @@ import requests
 from insightface.app import FaceAnalysis
 import json
 import os
-import requests
 from requests.auth import HTTPDigestAuth
 import threading
 import time
 from typing import Tuple
 from datetime import datetime
-import asyncio
-from app.services.access_service import access_service
-import aiohttp
-from queue import Queue
-import threading
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 EMBEDDINGS_FILE = "embeddings_arcface.json"
-THRESHOLD = 0.5
-MOVEMENT_THRESHOLD = 50  # Umbral para detectar movimiento
+THRESHOLD = 0.45
 
 class FaceRecognizer:
     def __init__(self):
-        self.app = FaceAnalysis(providers=['CUDAExecutionProvider'])
-        self.app.prepare(ctx_id=0, det_size=(640, 640))
-        self.known_faces = self.load_embeddings(EMBEDDINGS_FILE)
-        self.previous_positions = {}  # Almacena posiciones anteriores de personas
-        self.last_detection_time = {}  # Almacena el último tiempo de detección por persona
-        self.entry_line_y = None  # Línea de entrada
-        self.exit_line_y = None   # Línea de salida
-        self.region_height = None # Altura de la región de detección
-        self._session = None
-        self.event_queue = Queue()
-        self.processing_thread = threading.Thread(target=self._process_events, daemon=True)
-        self.processing_thread.start()
-
-    def _process_events(self):
-        """Procesa eventos de la cola en un hilo separado"""
-        while True:
-            try:
-                event = self.event_queue.get()
-                if event:
-                    asyncio.run(self._send_event(event))
-                time.sleep(0.1)  # Pequeña pausa para no sobrecargar la CPU
-            except Exception as e:
-                print(f"Error procesando evento: {str(e)}")
-
-    async def _send_event(self, event):
-        """Envía el evento al servidor"""
+        # Configuración de InsightFace (mantener la configuración GPU existente)
         try:
-            if self._session is None:
-                self._session = aiohttp.ClientSession()
+            import onnxruntime as ort
+            available_providers = ort.get_available_providers()
+            print(f"🔍 Proveedores ONNX disponibles: {available_providers}")
             
-            async with self._session.post("http://localhost:8000/access/log", json=event) as response:
-                if response.status == 200:
-                    print(f"✅ Registro de {event['event_type']} exitoso para {event['name']}")
-                else:
-                    print(f"❌ Error al registrar {event['event_type']} para {event['name']}: {response.status}")
+            providers = []
+            if 'CUDAExecutionProvider' in available_providers:
+                providers.append(('CUDAExecutionProvider', {
+                    'device_id': 0,
+                    'arena_extend_strategy': 'kNextPowerOfTwo',
+                    'gpu_mem_limit': 2 * 1024 * 1024 * 1024,
+                    'cudnn_conv_algo_search': 'EXHAUSTIVE',
+                    'do_copy_in_default_stream': True,
+                }))
+                print("✅ Configurando CUDA para GPU")
+            
+            if 'CPUExecutionProvider' in available_providers:
+                providers.append('CPUExecutionProvider')
+                print("✅ CPU como respaldo disponible")
+            
+            if not providers:
+                providers = ['CPUExecutionProvider']
+                print("⚠️ Solo CPU disponible")
+            
+            self.app = FaceAnalysis(providers=providers)
+            
+            if 'CUDAExecutionProvider' in [p[0] if isinstance(p, tuple) else p for p in providers]:
+                self.app.prepare(ctx_id=0, det_size=(640, 640))
+                print("🚀 InsightFace configurado con GPU")
+            else:
+                self.app.prepare(ctx_id=-1, det_size=(320, 320))
+                print("🐌 InsightFace configurado con CPU (tamaño reducido)")
+                
         except Exception as e:
-            print(f"❌ Error al enviar evento: {str(e)}")
+            print(f"❌ Error configurando InsightFace: {str(e)}")
+            self.app = FaceAnalysis(providers=['CPUExecutionProvider'])
+            self.app.prepare(ctx_id=-1, det_size=(320, 320))
+            print("🔄 Usando CPU como respaldo")
+        
+        self.known_faces = self.load_embeddings(EMBEDDINGS_FILE)
+        self.region_height = None
+        self.entry_line_y = None
+        self.exit_line_y = None
+
+    def recognize_for_stream(self, img) -> Tuple[np.ndarray, list]:
+        """Versión simplificada solo para streaming - no maneja control de acceso"""
+        # Configurar región de detección si no está configurada
+        if self.region_height is None:
+            self.set_detection_region(img.shape[0])
+    
+        # Dibujar elementos UI
+        cv2.line(img, (0, self.entry_line_y), (img.shape[1], self.entry_line_y), (0, 255, 0), 2)
+        cv2.line(img, (0, self.exit_line_y), (img.shape[1], self.exit_line_y), (0, 0, 255), 2)
+        cv2.putText(img, "Entrada", (10, self.entry_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        cv2.putText(img, "Salida", (10, self.exit_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+    
+        # Procesamiento de caras
+        faces = self.app.get(img)
+        detected_names = []
+        
+        for face in faces:
+            match_name = "Desconocido"
+            max_sim = -1
+            
+            for name, embeddings in self.known_faces.items():
+                for known_embedding in embeddings:
+                    sim = self.calculate_similarity(face.embedding, known_embedding)
+                    if sim > THRESHOLD and sim > max_sim:
+                        match_name = name
+                        max_sim = sim
+    
+            detected_names.append(match_name)
+            
+            # Dibujar resultados
+            x1, y1, x2, y2 = face.bbox.astype(int)
+            color = (0, 255, 0) if match_name != "Desconocido" else (0, 0, 255)
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        return img, detected_names
 
     def load_embeddings(self, embeddings_file):
         """Carga los embeddings desde un archivo JSON"""
@@ -88,106 +127,11 @@ class FaceRecognizer:
         """Configura las líneas de entrada y salida basadas en la altura del frame"""
         if self.region_height is None:
             self.region_height = frame_height
-            # Definir las líneas de entrada y salida
-            self.entry_line_y = int(frame_height * 0.7)  # 70% de la altura
-            self.exit_line_y = int(frame_height * 0.3)   # 30% de la altura
+            self.entry_line_y = int(frame_height * 0.7)
+            self.exit_line_y = int(frame_height * 0.3)
 
-    def log_access(self, person_id: str, name: str, event_type: str, camera_id: str, confidence: float):
-        """Agrega un evento de acceso a la cola"""
-        current_time = datetime.now()
-        
-        # Evitar registros duplicados (mínimo 5 segundos entre registros)
-        if person_id in self.last_detection_time:
-            time_diff = (current_time - self.last_detection_time[person_id]).total_seconds()
-            if time_diff < 5:
-                return
-
-        self.last_detection_time[person_id] = current_time
-
-        access_log = {
-            "person_id": person_id,
-            "name": name,
-            "timestamp": current_time.isoformat(),
-            "event_type": event_type,
-            "camera_id": camera_id,
-            "confidence": confidence
-        }
-
-        # Agregar evento a la cola
-        self.event_queue.put(access_log)
-
-    def determine_movement(self, person_id: str, current_y: int) -> str:
-        """Determina si la persona está entrando o saliendo basado en su posición relativa a las líneas"""
-        if person_id not in self.previous_positions:
-            self.previous_positions[person_id] = current_y
-            return None
-
-        previous_y = self.previous_positions[person_id]
-        
-        # Actualizar posición
-        self.previous_positions[person_id] = current_y
-        
-        # Determinar dirección del movimiento basado en la posición actual
-        if current_y > self.entry_line_y:
-            return "ENTRY"
-        elif current_y < self.exit_line_y:
-            return "EXIT"
-        
-        return None
-
-    def recognize(self, img, camera_id: str) -> Tuple[np.ndarray, list]:
-        """Reconoce caras en la imagen y registra entradas/salidas"""
-        # Configurar región de detección si no está configurada
-        if self.region_height is None:
-            self.set_detection_region(img.shape[0])
-
-        # Dibujar líneas de entrada y salida
-        cv2.line(img, (0, self.entry_line_y), (img.shape[1], self.entry_line_y), (0, 255, 0), 2)
-        cv2.line(img, (0, self.exit_line_y), (img.shape[1], self.exit_line_y), (0, 0, 255), 2)
-        cv2.putText(img, "Entrada", (10, self.entry_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        cv2.putText(img, "Salida", (10, self.exit_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-
-        faces = self.app.get(img)
-        detected_names = []
-        
-        for face in faces:
-            match_name = "Desconocido"
-            max_sim = -1
-            for name, embeddings in self.known_faces.items():
-                for known_embedding in embeddings:
-                    sim = self.calculate_similarity(face.embedding, known_embedding)
-                    if sim > THRESHOLD and sim > max_sim:
-                        match_name = name
-                        max_sim = sim
-
-            detected_names.append(match_name)
-            
-            # Determinar movimiento basado en la posición actual
-            current_y = face.bbox[1]  # Coordenada Y del rostro
-            person_id = f"{match_name}_{face.bbox[0]}"  # ID único basado en nombre y posición X
-            event_type = self.determine_movement(person_id, current_y)
-            
-            # Registrar acceso si se detectó una posición válida
-            if event_type and match_name != "Desconocido":
-                self.log_access(
-                    person_id=person_id,
-                    name=match_name,
-                    event_type=event_type,
-                    camera_id=camera_id,
-                    confidence=max_sim
-                )
-            
-            # Draw box
-            x1, y1, x2, y2 = face.bbox.astype(int)
-            color = (0, 255, 0) if match_name != "Desconocido" else (0, 0, 255)
-            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        
-        return img, detected_names
-
-recognizer = FaceRecognizer()
-
-# Resto del código (stream_frames_with_digest y stream_frames_without_auth) permanece igual
+# Instancia global para streaming
+stream_recognizer = FaceRecognizer()
 
 def stream_frames_with_digest(url, username, password):
     auth = HTTPDigestAuth(username, password)

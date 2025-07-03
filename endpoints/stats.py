@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Response
-from app.models.schemas import RecognitionStats
-from app.services.stats_service import get_camera_stats
+from models.schemas import RecognitionStats
+from services.stats_service import get_camera_stats
 
 router = APIRouter(prefix="/stats", tags=["statistics"])
 
