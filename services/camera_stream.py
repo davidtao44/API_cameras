@@ -19,8 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry  # ✅ Agregar esta importación
 
-# EMBEDDINGS_FILE = "embeddings_arcface.json"
-EMBEDDINGS_FILE = r"C:/Users/jhona/Documents/Tecon/Camaras/embeddings_arcface.json"
+EMBEDDINGS_FILE = "embeddings_arcface.json"
+#EMBEDDINGS_FILE = r"C:/Users/jhona/Documents/Tecon/Camaras/embeddings_arcface.json"
 THRESHOLD = 0.5
 MOVEMENT_THRESHOLD = 50  # Umbral para detectar movimiento
 
@@ -115,6 +115,10 @@ class FaceRecognizer:
         self.relay_active = False
         self.relay_timer = None
         self.relay_deactivation_time = None
+        
+        # Control de throttling para access-control
+        self.last_access_control_call = {}
+        self.access_control_cooldown = 3  # 3 segundos entre llamadas por cámara
 
     def _process_events(self):
         """Procesa eventos de la cola en un hilo separado"""
@@ -320,13 +324,21 @@ class FaceRecognizer:
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
-        # Notificar al servicio de control de acceso (no bloqueante)
+        # Notificar al servicio de control de acceso con throttling (no bloqueante)
         if detected_names and any(name != "Desconocido" for name in detected_names):
-            # Ejecutar en hilo separado para no bloquear GPU
-            threading.Thread(
-                target=lambda: asyncio.run(self._notify_access_control(detected_names, camera_id)),
-                daemon=True
-            ).start()
+            current_time = time.time()
+            
+            # Verificar si ha pasado suficiente tiempo desde la última llamada para esta cámara
+            if (camera_id not in self.last_access_control_call or 
+                current_time - self.last_access_control_call[camera_id] >= self.access_control_cooldown):
+                
+                self.last_access_control_call[camera_id] = current_time
+                
+                # Ejecutar en hilo separado para no bloquear GPU
+                threading.Thread(
+                    target=lambda: asyncio.run(self._notify_access_control(detected_names, camera_id)),
+                    daemon=True
+                ).start()
         
         return img, detected_names
 
