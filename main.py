@@ -4,7 +4,7 @@ import uvicorn
 import threading
 import time
 from config.firebase import initialize_firebase
-from endpoints import camera, stats, access, relay
+from endpoints import camera, stats, access, relay, access_control  # ✅ Agregar access_control
 from services.firebase_service import monitor_firebase_visitors
 
 app = FastAPI()
@@ -23,6 +23,7 @@ app.include_router(camera.router)
 app.include_router(stats.router)
 app.include_router(access.router)
 app.include_router(relay.router)
+app.include_router(access_control.router)  # ✅ Agregar el nuevo router
 
 # Inicializar Firebase
 firebase_initialized = initialize_firebase()

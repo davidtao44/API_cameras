@@ -239,55 +239,48 @@ class FaceRecognizer:
         self.relay_timer = threading.Timer(0, lambda: self.network_executor.submit(deactivate_after_delay))
         self.relay_timer.start()
 
-    def _process_access_control_optimized(self, detected_names: list, camera_id: str):
-        """Versión optimizada del control de acceso - no bloquea GPU"""
-        if not detected_names:
-            return
-        
-        # Verificaciones rápidas primero (sin I/O)
-        if not self._all_faces_recognized(detected_names):
-            return
-            
-        if self._is_in_cooldown():
-            return
-            
-        if self.relay_active:
-            return
-        
-        print(f"🎯 Todos los rostros reconocidos: {detected_names}")
-        
-        # Activar relé de forma no bloqueante
-        future = self._activate_relay_optimized()
-        self.last_relay_activation = datetime.now()
-        
-        # Opcional: verificar resultado sin bloquear
-        def check_result():
-            try:
-                result = future.result(timeout=0.1)  # Timeout muy corto
-                if not result:
-                    print("⚠️ Activación del relé falló")
-            except:
-                pass  # No bloquear si la petición aún está en curso
-        
-        # Verificar resultado en hilo separado
-        threading.Thread(target=check_result, daemon=True).start()
-
+    # En la clase FaceRecognizer, remover todos los métodos relacionados con relé:
+    # - _activate_relay_optimized
+    # - _schedule_relay_deactivation_optimized  
+    # - _process_access_control_optimized
+    # - relay_config, relay_active, etc.
+    
+    # Agregar método para comunicarse con el servicio de control de acceso:
+    async def _notify_access_control(self, detected_names: list[str], camera_id: str):
+        """Notifica al servicio de control de acceso sobre rostros detectados"""
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=1)) as session:
+                url = "http://localhost:8000/access-control/evaluate"
+                data = {
+                    "camera_id": camera_id,
+                    "detected_names": detected_names,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+                async with session.post(url, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        if result["relay_activated"]:
+                            print(f"🚪 {result['message']}")
+        except Exception as e:
+            print(f"Error notificando control de acceso: {e}")
+    
+    # Modificar el método recognize para usar el nuevo sistema:
     def recognize(self, img, camera_id: str) -> Tuple[np.ndarray, list]:
         """Versión optimizada del reconocimiento - prioriza GPU"""
         # Configurar región de detección si no está configurada
         if self.region_height is None:
             self.set_detection_region(img.shape[0])
-
+    
         # Dibujar elementos UI (operaciones rápidas)
         cv2.line(img, (0, self.entry_line_y), (img.shape[1], self.entry_line_y), (0, 255, 0), 2)
         cv2.line(img, (0, self.exit_line_y), (img.shape[1], self.exit_line_y), (0, 0, 255), 2)
         cv2.putText(img, "Entrada", (10, self.entry_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         cv2.putText(img, "Salida", (10, self.exit_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-
-        # Estado del relé (usar cache para evitar bloqueos)
-        relay_status = "🟢 ACTIVO" if self.relay_active else "🔴 INACTIVO"
-        cv2.putText(img, f"Rele: {relay_status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
+    
+        # Ya no mostramos el estado del relé aquí, ya que ahora es responsabilidad del servicio de control de acceso
+        # cv2.putText(img, f"Rele: {relay_status}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    
         # PROCESAMIENTO GPU - Esta es la parte crítica que no debe bloquearse
         faces = self.app.get(img)
         detected_names = []
@@ -304,7 +297,7 @@ class FaceRecognizer:
                     if sim > THRESHOLD and sim > max_sim:
                         match_name = name
                         max_sim = sim
-
+    
             detected_names.append(match_name)
             
             # Logging de acceso (operación rápida)
@@ -327,8 +320,13 @@ class FaceRecognizer:
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
-        # Control de acceso optimizado (no bloquea GPU)
-        self._process_access_control_optimized(detected_names, camera_id)
+        # Notificar al servicio de control de acceso (no bloqueante)
+        if detected_names and any(name != "Desconocido" for name in detected_names):
+            # Ejecutar en hilo separado para no bloquear GPU
+            threading.Thread(
+                target=lambda: asyncio.run(self._notify_access_control(detected_names, camera_id)),
+                daemon=True
+            ).start()
         
         return img, detected_names
 
