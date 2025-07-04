@@ -35,7 +35,6 @@ class SurveillanceService:
                 providers.append(('CUDAExecutionProvider', {
                     'device_id': 0,
                     'arena_extend_strategy': 'kNextPowerOfTwo',
-                    'gpu_mem_limit': 2 * 1024 * 1024 * 1024,
                     'cudnn_conv_algo_search': 'EXHAUSTIVE',
                     'do_copy_in_default_stream': True,
                 }))
@@ -56,7 +55,7 @@ class SurveillanceService:
                 print("🚀 InsightFace configurado con GPU para vigilancia")
             else:
                 self.app.prepare(ctx_id=-1, det_size=(320, 320))
-                print("🐌 InsightFace configurado con CPU para vigilancia")
+                print("� InsightFace configurado con CPU para vigilancia")
                 
         except Exception as e:
             print(f"❌ Error configurando InsightFace: {str(e)}")
@@ -98,7 +97,7 @@ class SurveillanceService:
         
         # Buffer para frames más recientes
         self.frame_buffers = {}  # Buffer por cámara
-        self.max_buffer_size = 3  # Mantener solo los 3 frames más recientes
+        self.max_buffer_size = 1  # Mantener solo los 3 frames más recientes
         
         # Configuración de muestreo de frames
         self.frame_skip_interval = 5
@@ -198,7 +197,7 @@ class SurveillanceService:
                                     self._notify_access_control(camera_id, detected_names)
 
                     # Pausa mínima para no bloquear el stream
-                    time.sleep(0.01)
+                    time.sleep(0.001)
                     
                 except Exception as e:
                     print(f"❌ Error procesando frame de {camera_id}: {e}")
@@ -373,12 +372,13 @@ class SurveillanceService:
     def calculate_similarity(self, e1, e2):
         return np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2))
 
-    def set_detection_region(self, frame_height: int):
-        """Configura las líneas de entrada y salida basadas en la altura del frame"""
-        if self.region_height is None:
-            self.region_height = frame_height
-            self.entry_line_y = int(frame_height * 0.7)
-            self.exit_line_y = int(frame_height * 0.3)
+    # Eliminar completamente este método (líneas 376-381):
+    # def set_detection_region(self, frame_height: int):
+    #     """Configura las líneas de entrada y salida basadas en la altura del frame"""
+    #     if self.region_height is None:
+    #         self.region_height = frame_height
+    #         self.entry_line_y = int(frame_height * 0.7)
+    #         self.exit_line_y = int(frame_height * 0.3)
 
     def log_access(self, person_id: str, name: str, event_type: str, camera_id: str, confidence: float):
         """Registra un evento de acceso directamente sin cola"""

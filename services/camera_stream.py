@@ -28,7 +28,6 @@ class FaceRecognizer:
                 providers.append(('CUDAExecutionProvider', {
                     'device_id': 0,
                     'arena_extend_strategy': 'kNextPowerOfTwo',
-                    'gpu_mem_limit': 2 * 1024 * 1024 * 1024,
                     'cudnn_conv_algo_search': 'EXHAUSTIVE',
                     'do_copy_in_default_stream': True,
                 }))
@@ -58,23 +57,75 @@ class FaceRecognizer:
             print("🔄 Usando CPU como respaldo")
         
         self.known_faces = self.load_embeddings(EMBEDDINGS_FILE)
-        self.region_height = None
-        self.entry_line_y = None
-        self.exit_line_y = None
+        # Eliminar estas líneas:
+        # self.region_height = None
+        # self.entry_line_y = None
+        # self.exit_line_y = None
+        self.last_analysis_time = {}
+        self.cached_results = {}  # Cache de resultados por cámara
+        
+    def recognize_for_stream_optimized(self, img, camera_id="default") -> Tuple[np.ndarray, list]:
+        """Versión optimizada con cache para evitar procesamiento innecesario"""
+        current_time = time.time()
+        
+        # Si tenemos resultados recientes (menos de 1 segundo), usar cache
+        if (camera_id in self.last_analysis_time and 
+            current_time - self.last_analysis_time[camera_id] < 1.0 and
+            camera_id in self.cached_results):
+            
+            # Dibujar resultados cacheados
+            cached_names, cached_boxes = self.cached_results[camera_id]
+            for i, (name, box) in enumerate(zip(cached_names, cached_boxes)):
+                x1, y1, x2, y2 = box
+                color = (0, 255, 0) if name != "Desconocido" else (0, 0, 255)
+                cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+                cv2.putText(img, name, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            
+            return img, cached_names
+        
+        # Realizar análisis completo
+        faces = self.app.get(img)
+        detected_names = []
+        detected_boxes = []
+        
+        for face in faces:
+            match_name = "Desconocido"
+            max_sim = -1
+            
+            for name, embeddings in self.known_faces.items():
+                for known_embedding in embeddings:
+                    sim = self.calculate_similarity(face.embedding, known_embedding)
+                    if sim > THRESHOLD and sim > max_sim:
+                        match_name = name
+                        max_sim = sim
+        
+            detected_names.append(match_name)
+            box = face.bbox.astype(int)
+            detected_boxes.append(box)
+            
+            # Dibujar resultados
+            x1, y1, x2, y2 = box
+            color = (0, 255, 0) if match_name != "Desconocido" else (0, 0, 255)
+            cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        # Actualizar cache
+        self.cached_results[camera_id] = (detected_names, detected_boxes)
+        self.last_analysis_time[camera_id] = current_time
+        
+        return img, detected_names
 
     def recognize_for_stream(self, img) -> Tuple[np.ndarray, list]:
-        """Versión simplificada solo para streaming - no maneja control de acceso"""
-        # Configurar región de detección si no está configurada
-        if self.region_height is None:
-            self.set_detection_region(img.shape[0])
+        """Versión simplificada solo para streaming - sin líneas de detección"""
+        # Eliminar todo el código de líneas:
+        # if self.region_height is None:
+        #     self.set_detection_region(img.shape[0])
+        # cv2.line(img, (0, self.entry_line_y), (img.shape[1], self.entry_line_y), (0, 255, 0), 2)
+        # cv2.line(img, (0, self.exit_line_y), (img.shape[1], self.exit_line_y), (0, 0, 255), 2)
+        # cv2.putText(img, "Entrada", (10, self.entry_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        # cv2.putText(img, "Salida", (10, self.exit_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
     
-        # Dibujar elementos UI
-        cv2.line(img, (0, self.entry_line_y), (img.shape[1], self.entry_line_y), (0, 255, 0), 2)
-        cv2.line(img, (0, self.exit_line_y), (img.shape[1], self.exit_line_y), (0, 0, 255), 2)
-        cv2.putText(img, "Entrada", (10, self.entry_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        cv2.putText(img, "Salida", (10, self.exit_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-    
-        # Procesamiento de caras
+        # Procesamiento de caras (mantener)
         faces = self.app.get(img)
         detected_names = []
         
@@ -91,13 +142,21 @@ class FaceRecognizer:
     
             detected_names.append(match_name)
             
-            # Dibujar resultados
+            # Dibujar resultados (mantener)
             x1, y1, x2, y2 = face.bbox.astype(int)
             color = (0, 255, 0) if match_name != "Desconocido" else (0, 0, 255)
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         return img, detected_names
+
+    # Eliminar completamente este método:
+    # def set_detection_region(self, frame_height: int):
+    #     """Configura las líneas de entrada y salida basadas en la altura del frame"""
+    #     if self.region_height is None:
+    #         self.region_height = frame_height
+    #         self.entry_line_y = int(frame_height * 0.7)
+    #         self.exit_line_y = int(frame_height * 0.3)
 
     def load_embeddings(self, embeddings_file):
         """Carga los embeddings desde un archivo JSON"""
@@ -122,13 +181,6 @@ class FaceRecognizer:
 
     def calculate_similarity(self, e1, e2):
         return np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2))
-
-    def set_detection_region(self, frame_height: int):
-        """Configura las líneas de entrada y salida basadas en la altura del frame"""
-        if self.region_height is None:
-            self.region_height = frame_height
-            self.entry_line_y = int(frame_height * 0.7)
-            self.exit_line_y = int(frame_height * 0.3)
 
 # Instancia global para streaming
 stream_recognizer = FaceRecognizer()

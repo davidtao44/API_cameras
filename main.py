@@ -42,15 +42,14 @@ if __name__ == "__main__":
     )
     firebase_monitor_thread.start()
     
-    # ✅ Iniciar el monitoreo automático de surveillance para cam1
     surveillance_thread = threading.Thread(
         target=surveillance_service.start_monitoring,
         args=("cam2",),
         daemon=True,
-        name="surveillance_cam1"
+        name="surveillance_cam2"
     )
     surveillance_thread.start()
-    print("🎥 Iniciando surveillance automático para cam1")
+    print("🎥 Iniciando surveillance automático para cam2")
     
     # Iniciar el servidor FastAPI
     uvicorn.run(app, host="0.0.0.0", port=8000)
