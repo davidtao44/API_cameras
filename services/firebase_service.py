@@ -105,7 +105,8 @@ def process_deleted_documents(deleted_doc_ids: set, firebase_mapping: dict, mapp
                         with open(mapping_file, 'w') as f:
                             json.dump(firebase_mapping, f)
                         
-                        recognizer.known_faces = recognizer.load_embeddings(embeddings_file)
+                        # En la línea 108 - función process_deleted_documents
+                        stream_recognizer.known_faces = stream_recognizer.load_embeddings(embeddings_file)
                         
                         print(f"Se eliminaron automáticamente {len(deleted_names)} personas: {', '.join(deleted_names)}")
         except Exception as e:
@@ -181,7 +182,8 @@ def process_person_images(doc_data: dict, person_name: str) -> list:
                 if img is None:
                     continue
                 
-                faces = recognizer.app.get(img)
+                # En la línea 184 - función process_person_images
+                faces = stream_recognizer.app.get(img)
                 if faces:
                     embedding = faces[0].embedding.tolist()
                     person_embeddings.append(embedding)
