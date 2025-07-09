@@ -4,7 +4,7 @@ CAMERAS = {
         "username": "admin",
         "password": "Tecon2025#",
         "auth_required": False,
-        "access_control_enabled": False,  # Control de acceso y envio de mensajes por http
+        "access_control_enabled": True,  # Control de acceso y envio de mensajes por http
         "http_notifications_enabled": False,  # Control de alamar y envio de imagenes por http
         "notification_phones": ["573107834112"]  # Números específicos por cámara
     },
