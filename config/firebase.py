@@ -13,14 +13,24 @@ def initialize_firebase():
         return True
         
     try:
-        cred_path = r"/home/tecon/Documentos/Camara/server_video/keys/serviceAccountKey.json"
-        #cred_path = r"C:/Users/jhona/Documents/Tecon/Camaras/Credenciales_Firebase.json"
+        # Fixed path for Docker container
+        cred_path = "/app/keys/serviceAccountKey.json"
+        # Fallback for local development
+        if not os.path.exists(cred_path):
+            cred_path = os.path.join(os.path.dirname(__file__), "..", "..", "keys", "serviceAccountKey.json")
+        
+        print(f"🔑 Intentando cargar credenciales desde: {cred_path}")
+        
+        if not os.path.exists(cred_path):
+            raise FileNotFoundError(f"No se encontró el archivo de credenciales en: {cred_path}")
+            
         cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(cred)
         _firebase_initialized = True
+        print("✅ Firebase inicializado correctamente")
         return True
     except Exception as e:
-        print(f"Error al inicializar Firebase: {e}")
+        print(f"❌ Error al inicializar Firebase: {e}")
         return False
 
 # Inicializar Firebase una sola vez al importar el módulo

@@ -12,7 +12,7 @@ class AccessControlService:
             "relay_ip": "172.16.2.47",
             "relay_id": 0,
             "access_duration": 5,
-            "cooldown_period": 5,
+            "cooldown_period": 20,
             "require_all_faces_known": True
         }
         self.last_activation = None
