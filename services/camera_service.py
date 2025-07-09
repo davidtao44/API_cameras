@@ -10,6 +10,7 @@ def generate_stream(config, camera_id: str):
     last_analysis_time = 0
     analysis_interval = 0.01  # 1 segundo entre análisis
     last_detected_names = []  # Mantener últimos nombres detectados
+    last_person_count = 0  # Mantener último conteo de personas
     
     if config.get("auth_required", True):
         user = config["username"]
@@ -23,9 +24,10 @@ def generate_stream(config, camera_id: str):
         
         # Solo analizar cada segundo
         if current_time - last_analysis_time >= analysis_interval:
-            # Realizar análisis de reconocimiento facial
-            analyzed_frame, names = stream_recognizer.recognize_for_stream(frame)
+            # Realizar análisis de reconocimiento facial y detección de personas
+            analyzed_frame, names, person_count = stream_recognizer.recognize_for_stream(frame)
             last_detected_names = names
+            last_person_count = person_count
             last_analysis_time = current_time
             
             # Actualizar estadísticas solo cuando se detectan nombres
@@ -33,7 +35,7 @@ def generate_stream(config, camera_id: str):
                 update_stats(camera_id, name)
         else:
             # Solo dibujar las detecciones anteriores sin procesar
-            analyzed_frame = draw_previous_detections(frame, last_detected_names)
+            analyzed_frame = draw_previous_detections(frame, last_detected_names, last_person_count)
         
         ret, jpeg = cv2.imencode('.jpg', analyzed_frame)
         if not ret:
@@ -43,13 +45,13 @@ def generate_stream(config, camera_id: str):
             b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n'
         )
 
-def draw_previous_detections(frame, names):
+def draw_previous_detections(frame, names, person_count):
     """Dibuja un indicador simple de las últimas detecciones sin procesar el frame"""
+    # Mostrar contador de personas detectadas en la esquina
+    text = f"Personas detectadas: {person_count}"
+    cv2.putText(frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+    
     if names:
-        # Mostrar contador de personas detectadas en la esquina
-        text = f"Personas detectadas: {len(names)}"
-        cv2.putText(frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
         # Mostrar nombres en la parte inferior
         y_offset = frame.shape[0] - 60
         for i, name in enumerate(names[:3]):  # Máximo 3 nombres

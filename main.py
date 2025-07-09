@@ -229,6 +229,14 @@ if __name__ == "__main__":
     )
     surveillance_thread.start()
     print("🎥 Iniciando surveillance automático para cam2")
+
+    surveillance_thread = threading.Thread(
+        target=lambda: surveillance_service.start_monitoring("cam3"),
+        daemon=True,
+        name="surveillance_cam3"
+    )
+    surveillance_thread.start()
+    print("🎥 Iniciando surveillance automático para cam3")
     
     # Iniciar el servidor webhook HTTP en un hilo separado
     webhook_thread = threading.Thread(

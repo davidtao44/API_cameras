@@ -11,6 +11,8 @@ from typing import Tuple
 from datetime import datetime
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+# Agregar importación para YOLO
+from ultralytics import YOLO
 
 EMBEDDINGS_FILE = "embeddings_arcface.json"
 THRESHOLD = 0.40
@@ -56,24 +58,62 @@ class FaceRecognizer:
             self.app.prepare(ctx_id=-1, det_size=(320, 320))
             print("🔄 Usando CPU como respaldo")
         
+        # Configuración de YOLO para detección de personas
+        try:
+            self.yolo_model = YOLO('yolov8n.pt')  # Modelo ligero para detección
+            # Configurar explícitamente para usar CPU
+            self.yolo_model.to('cpu')
+            print("✅ Modelo YOLO cargado para detección de personas (CPU)")
+        except Exception as e:
+            print(f"❌ Error cargando modelo YOLO: {str(e)}")
+            self.yolo_model = None
+        
         self.known_faces = self.load_embeddings(EMBEDDINGS_FILE)
-        # Eliminar estas líneas:
-        # self.region_height = None
-        # self.entry_line_y = None
-        # self.exit_line_y = None
         self.last_analysis_time = {}
         self.cached_results = {}  # Cache de resultados por cámara
+        self.person_detection_cache = {}  # Cache para detección de personas
         
-    def recognize_for_stream_optimized(self, img, camera_id="default") -> Tuple[np.ndarray, list]:
-        """Versión optimizada con cache para evitar procesamiento innecesario"""
+    def detect_persons(self, img):
+        """Detecta personas en la imagen usando YOLO"""
+        if self.yolo_model is None:
+            return [], 0
+        
+        try:
+            # Ejecutar detección YOLO
+            results = self.yolo_model(img, verbose=False)
+            
+            person_boxes = []
+            person_count = 0
+            
+            for result in results:
+                boxes = result.boxes
+                if boxes is not None:
+                    for box in boxes:
+                        # Clase 0 en COCO dataset es 'person'
+                        if int(box.cls[0]) == 0:  # person class
+                            confidence = float(box.conf[0])
+                            if confidence > 0.5:  # Umbral de confianza
+                                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                                person_boxes.append((x1, y1, x2, y2, confidence))
+                                person_count += 1
+            
+            return person_boxes, person_count
+            
+        except Exception as e:
+            print(f"❌ Error en detección de personas: {e}")
+            return [], 0
+    
+    def recognize_for_stream_optimized(self, img, camera_id="default") -> Tuple[np.ndarray, list, int]:
+        """Versión optimizada con cache para evitar procesamiento innecesario + detección de personas"""
         current_time = time.time()
         
         # Si tenemos resultados recientes (menos de 1 segundo), usar cache
         if (camera_id in self.last_analysis_time and 
             current_time - self.last_analysis_time[camera_id] < 1.0 and
-            camera_id in self.cached_results):
+            camera_id in self.cached_results and
+            camera_id in self.person_detection_cache):
             
-            # Dibujar resultados cacheados
+            # Dibujar resultados cacheados de reconocimiento facial
             cached_names, cached_boxes = self.cached_results[camera_id]
             for i, (name, box) in enumerate(zip(cached_names, cached_boxes)):
                 x1, y1, x2, y2 = box
@@ -81,9 +121,23 @@ class FaceRecognizer:
                 cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(img, name, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
             
-            return img, cached_names
+            # Dibujar resultados cacheados de detección de personas
+            cached_person_boxes, cached_person_count = self.person_detection_cache[camera_id]
+            for x1, y1, x2, y2, conf in cached_person_boxes:
+                cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                cv2.putText(img, f"Persona {conf:.2f}", (x1, y1-30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+            
+            # Mostrar contador de personas
+            cv2.putText(img, f"Personas detectadas: {cached_person_count}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            return img, cached_names, cached_person_count
         
         # Realizar análisis completo
+        # 1. Detección de personas con YOLO
+        person_boxes, person_count = self.detect_persons(img)
+        
+        # 2. Reconocimiento facial con InsightFace
         faces = self.app.get(img)
         detected_names = []
         detected_boxes = []
@@ -103,29 +157,34 @@ class FaceRecognizer:
             box = face.bbox.astype(int)
             detected_boxes.append(box)
             
-            # Dibujar resultados
+            # Dibujar resultados de reconocimiento facial
             x1, y1, x2, y2 = box
             color = (0, 255, 0) if match_name != "Desconocido" else (0, 0, 255)
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
+        # Dibujar detecciones de personas
+        for x1, y1, x2, y2, conf in person_boxes:
+            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cv2.putText(img, f"Persona {conf:.2f}", (x1, y1-30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        
+        # Mostrar contador de personas
+        cv2.putText(img, f"Personas detectadas: {person_count}", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
         # Actualizar cache
         self.cached_results[camera_id] = (detected_names, detected_boxes)
+        self.person_detection_cache[camera_id] = (person_boxes, person_count)
         self.last_analysis_time[camera_id] = current_time
         
-        return img, detected_names
+        return img, detected_names, person_count
 
-    def recognize_for_stream(self, img) -> Tuple[np.ndarray, list]:
-        """Versión simplificada solo para streaming - sin líneas de detección"""
-        # Eliminar todo el código de líneas:
-        # if self.region_height is None:
-        #     self.set_detection_region(img.shape[0])
-        # cv2.line(img, (0, self.entry_line_y), (img.shape[1], self.entry_line_y), (0, 255, 0), 2)
-        # cv2.line(img, (0, self.exit_line_y), (img.shape[1], self.exit_line_y), (0, 0, 255), 2)
-        # cv2.putText(img, "Entrada", (10, self.entry_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        # cv2.putText(img, "Salida", (10, self.exit_line_y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-    
-        # Procesamiento de caras (mantener)
+    def recognize_for_stream(self, img) -> Tuple[np.ndarray, list, int]:
+        """Versión simplificada para streaming con detección de personas"""
+        # Detección de personas con YOLO
+        person_boxes, person_count = self.detect_persons(img)
+        
+        # Procesamiento de caras con InsightFace
         faces = self.app.get(img)
         detected_names = []
         
@@ -142,21 +201,27 @@ class FaceRecognizer:
     
             detected_names.append(match_name)
             
-            # Dibujar resultados (mantener)
+            # Dibujar resultados de reconocimiento facial
             x1, y1, x2, y2 = face.bbox.astype(int)
             color = (0, 255, 0) if match_name != "Desconocido" else (0, 0, 255)
             cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(img, f"{match_name} ({max_sim:.2f})", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
-        return img, detected_names
+        # Dibujar detecciones de personas
+        for x1, y1, x2, y2, conf in person_boxes:
+            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cv2.putText(img, f"Persona {conf:.2f}", (x1, y1-30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        
+        # Mostrar contador de personas
+        cv2.putText(img, f"Personas detectadas: {person_count}", (10, 30), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
+        return img, detected_names, person_count
 
-    # Eliminar completamente este método:
-    # def set_detection_region(self, frame_height: int):
-    #     """Configura las líneas de entrada y salida basadas en la altura del frame"""
-    #     if self.region_height is None:
-    #         self.region_height = frame_height
-    #         self.entry_line_y = int(frame_height * 0.7)
-    #         self.exit_line_y = int(frame_height * 0.3)
+    def get_person_count(self, img) -> int:
+        """Método específico para obtener solo el conteo de personas"""
+        _, person_count = self.detect_persons(img)
+        return person_count
 
     def load_embeddings(self, embeddings_file):
         """Carga los embeddings desde un archivo JSON"""

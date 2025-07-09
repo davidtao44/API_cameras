@@ -17,6 +17,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from config.settings import CAMERAS
 import base64
+# Agregar importación para YOLO
+from ultralytics import YOLO
 
 EMBEDDINGS_FILE = "embeddings_arcface.json"
 THRESHOLD = 0.40
@@ -25,6 +27,9 @@ class SurveillanceService:
     def __init__(self):
         # Configuración de InsightFace
         self._setup_insightface()
+        
+        # Configuración de YOLO para detección de personas
+        self._setup_yolo()
         
         # Cargar embeddings conocidos
         self.known_faces = self.load_embeddings(EMBEDDINGS_FILE)
@@ -47,6 +52,48 @@ class SurveillanceService:
         
         # Configuración de notificaciones
         self._setup_notifications()
+
+    def _setup_yolo(self):
+        """Configura YOLO para detección de personas"""
+        try:
+            # Forzar YOLO a usar CPU para evitar conflictos con InsightFace GPU
+            self.yolo_model = YOLO('yolov8n.pt')
+            # Configurar explícitamente para usar CPU
+            self.yolo_model.to('cpu')
+            print("✅ Modelo YOLO cargado para detección de personas en vigilancia (CPU)")
+        except Exception as e:
+            print(f"❌ Error cargando modelo YOLO en vigilancia: {str(e)}")
+            self.yolo_model = None
+
+    def detect_persons(self, img):
+        """Detecta personas en la imagen usando YOLO"""
+        if self.yolo_model is None:
+            return [], 0
+        
+        try:
+            # Ejecutar detección YOLO en CPU
+            results = self.yolo_model(img, device='cpu', verbose=False)
+            
+            person_boxes = []
+            person_count = 0
+            
+            for result in results:
+                boxes = result.boxes
+                if boxes is not None:
+                    for box in boxes:
+                        # Clase 0 en COCO dataset es 'person'
+                        if int(box.cls[0]) == 0:  # person class
+                            confidence = float(box.conf[0])
+                            if confidence > 0.5:  # Umbral de confianza
+                                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                                person_boxes.append((x1, y1, x2, y2, confidence))
+                                person_count += 1
+            
+            return person_boxes, person_count
+            
+        except Exception as e:
+            print(f"❌ Error en detección de personas: {e}")
+            return [], 0
 
     def _setup_insightface(self):
         """Configura InsightFace con GPU/CPU"""
@@ -212,9 +259,14 @@ class SurveillanceService:
                     if self.frame_counters[camera_id] % self.frame_skip_interval == 0:
                         latest_frame = self._get_latest_frame(camera_id)
                         if latest_frame is not None:
-                            detected_names, processed_frame = self._process_frame_for_surveillance(latest_frame, camera_id)
+                            detected_names, processed_frame, detection_stats = self._process_frame_for_surveillance(latest_frame, camera_id)
                             self._add_processed_frame_to_buffer(camera_id, processed_frame)
                             
+                            # # Imprimir estadísticas de detección
+                            # if detection_stats["person_count"] > 0 or detection_stats["face_count"] > 0:
+                            #     if detection_stats["person_count"] != detection_stats["face_count"]:
+                            #         print("Discrepancia detectada en", camera_id , "numero de rostros: ",detection_stats["face_count"], "numero de personas: ",detection_stats["person_count"])
+
                             # Verificar desconocidos persistentes
                             self._check_unknown_persistence(camera_id, detected_names)
                             
@@ -261,10 +313,16 @@ class SurveillanceService:
     # ==================== MÉTODOS DE PROCESAMIENTO DE FRAMES ====================
     
     def _process_frame_for_surveillance(self, img, camera_id: str) -> tuple:
-        """Procesa un frame para vigilancia y devuelve nombres detectados y frame procesado"""
+        """Procesa un frame para vigilancia y devuelve nombres detectados, frame procesado y estadísticas de detección"""
         processed_frame = img.copy()
+        
+        # 1. Detección de personas con YOLO
+        person_boxes, person_count = self.detect_persons(img)
+        
+        # 2. Reconocimiento facial con InsightFace
         faces = self.app.get(img)
         detected_names = []
+        face_count = len(faces)
         
         for face in faces:
             match_name = "Desconocido"
@@ -279,7 +337,7 @@ class SurveillanceService:
     
             detected_names.append(match_name)
             
-            # Dibujar detección en el frame
+            # Dibujar detección facial en el frame
             self._draw_detection_on_frame(processed_frame, face, match_name, max_sim)
             
             # Logging para personas conocidas
@@ -293,12 +351,35 @@ class SurveillanceService:
                     confidence=max_sim
                 )
         
+        # Dibujar detecciones de personas
+        for x1, y1, x2, y2, conf in person_boxes:
+            cv2.rectangle(processed_frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            cv2.putText(processed_frame, f"Persona {conf:.2f}", (x1, y1-30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        
+        # Mostrar estadísticas de detección
+        stats_text = f"Personas: {person_count} | Rostros: {face_count}"
+        cv2.putText(processed_frame, stats_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        
         # Agregar timestamp
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         cv2.putText(processed_frame, timestamp, (10, processed_frame.shape[0] - 10), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
-        return detected_names, processed_frame
+        # Detectar discrepancias (más personas que rostros detectados)
+        if person_count > face_count and person_count > 0:
+            discrepancy_text = f"⚠️ ALERTA: {person_count - face_count} persona(s) sin rostro detectado"
+            cv2.putText(processed_frame, discrepancy_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+            
+            # Log de la discrepancia
+            self.log_access(
+                person_id=f"discrepancy_{camera_id}_{int(time.time())}",
+                name="Discrepancia de Detección",
+                event_type="alerta_discrepancia",
+                camera_id=camera_id,
+                confidence=1.0
+            )
+        
+        return detected_names, processed_frame, {"person_count": person_count, "face_count": face_count}
 
     def _draw_detection_on_frame(self, frame, face, match_name: str, confidence: float):
         """Dibuja la detección en el frame"""
