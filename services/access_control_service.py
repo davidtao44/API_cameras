@@ -94,15 +94,9 @@ class AccessControlService:
         """Activa el relé de forma asíncrona"""
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as session:
-                url = "http://localhost:8000/relay/switch"
-                data = {
-                    "ip": self.config["relay_ip"],
-                    "relay_id": self.config["relay_id"],
-                    "state": True,
-                    "timeout": 3
-                }
+                url = f"http://{self.config['relay_ip']}/rpc/Switch.Set?id={self.config['relay_id']}&on=true"
                 
-                async with session.post(url, json=data) as response:
+                async with session.get(url) as response:
                     if response.status == 200:
                         self.relay_active = True
                         self._schedule_deactivation()
@@ -131,15 +125,9 @@ class AccessControlService:
         """Desactiva el relé"""
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3)) as session:
-                url = "http://localhost:8000/relay/switch"
-                data = {
-                    "ip": self.config["relay_ip"],
-                    "relay_id": self.config["relay_id"],
-                    "state": False,
-                    "timeout": 3
-                }
+                url = f"http://{self.config['relay_ip']}/rpc/Switch.Set?id={self.config['relay_id']}&on=false"
                 
-                async with session.post(url, json=data) as response:
+                async with session.get(url) as response:
                     if response.status == 200:
                         self.relay_active = False
                         return True

@@ -214,40 +214,39 @@ if __name__ == "__main__":
     )
     firebase_monitor_thread.start()
     
-    surveillance_thread = threading.Thread(
+    surveillance_thread1 = threading.Thread(
         target=lambda: surveillance_service.start_monitoring("cam1"),
         daemon=True,
-        name="surveillance_cam1"
+        name="surveillance_cam2"
     )
-    surveillance_thread.start()
-    print("🎥 Iniciando surveillance automático para cam1")
+    surveillance_thread1.start()
 
-    surveillance_thread = threading.Thread(
+    surveillance_thread2 = threading.Thread(
         target=lambda: surveillance_service.start_monitoring("cam2"),
         daemon=True,
         name="surveillance_cam2"
     )
-    surveillance_thread.start()
+    surveillance_thread2.start()
     print("🎥 Iniciando surveillance automático para cam2")
 
-    surveillance_thread = threading.Thread(
+    surveillance_thread3 = threading.Thread(
         target=lambda: surveillance_service.start_monitoring("cam3"),
         daemon=True,
         name="surveillance_cam3"
     )
-    surveillance_thread.start()
+    surveillance_thread3.start()
     print("🎥 Iniciando surveillance automático para cam3")
     
     # Iniciar el servidor webhook HTTP en un hilo separado
     webhook_thread = threading.Thread(
         target=run_webhook_server,
-        kwargs={"host": "0.0.0.0", "port": 5002},  # Cambiar a puerto 5002
+        kwargs={"host": "0.0.0.0", "port": 5005},  # Cambiar a puerto 5002
         daemon=True,
         name="webhook_server"
     )
     webhook_thread.start()
-    print("📡 Servidor webhook HTTP iniciado en puerto 5001")
+    print("📡 Servidor webhook HTTP iniciado en puerto 5005")
     
     # Iniciar el servidor FastAPI
-    print("🚀 Iniciando servidor FastAPI en puerto 8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("🚀 Iniciando servidor FastAPI en puerto 8005")
+    uvicorn.run(app, host="0.0.0.0", port=8005)

@@ -10,6 +10,8 @@ import time
 from typing import Tuple
 from datetime import datetime
 import asyncio
+
+from ultralytics.utils.torch_utils import F
 from services.access_service import access_service
 import aiohttp
 from concurrent.futures import ThreadPoolExecutor
@@ -694,10 +696,12 @@ class SurveillanceService:
                      f"Cámara: {ubication}\n" \
                      f"{discrepancy_count} persona(s) detectada(s) sin rostro identificable\n" \
                      f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" \
-                     f"Posible intrusión o persona con rostro oculto"
+                     f"Posible intrusión o persona con rostro oculto\n" \
+                     f"Si desea enrrolar al desconocido acceda al link: https://homeface.tecon.com.co/\n" \
+                     f"Usuario: devps@tecon.com.co contraseña: admin123 "     
             
             # Obtener números de teléfono específicos de la configuración de la cámara
-            notification_phones = config.get("notification_phones", ["573107834112", "573132843357"])
+            notification_phones = config.get("notification_phones", ["573107834112",  "573132843357"])
             
             # Enviar a los números configurados para esta cámara
             for phone in notification_phones:

@@ -14,7 +14,7 @@ CAMERAS = {
         "password": "Tecon2025#",
         "auth_required": False,
         "access_control_enabled": True,  # Control de acceso habilitado
-        "http_notifications_enabled": False,  # Notificaciones habilitadas
+        "http_notifications_enabled": True,  # Notificaciones habilitadas
         "notification_phones": ["573107834112", "573132844357"]  # Solo un número para esta cámara
     },
     "cam3": {
@@ -23,7 +23,7 @@ CAMERAS = {
         "password": "Tecon2025#",
         "auth_required": False,
         "access_control_enabled": False,  # Control de acceso habilitado
-        "http_notifications_enabled": False,  # Notificaciones habilitadas
+        "http_notifications_enabled": True,  # Notificaciones habilitadas
         "notification_phones": ["573107834112", "573132844357"]  # Solo un número para esta cámara
     }
 }
