@@ -170,8 +170,22 @@ class SurveillanceService:
         """Configura detección de desconocidos persistentes"""
         self.unknown_detection_start = {}
         self.unknown_alert_sent = {}
-        self.unknown_persistence_threshold = 15
+        self.base_unknown_threshold = 15# Threshold base para detección de desconocidos (20 segundos)
         self.unknown_alert_cooldown = 3
+        
+        # Configuración para detección de discrepancias (más personas que rostros)
+        self.discrepancy_detection_start = {}
+        self.discrepancy_alert_sent = {}
+        self.discrepancy_persistence_threshold = 10  # 10 segundos para activar alarma
+        self.discrepancy_alert_cooldown = 30  # 30 segundos entre alertas
+        
+        # Configuración para sistema de alarmas progresivas
+        self.alarm_activation_count = {}  # Contador de activaciones por cámara
+        self.alarm_reset_time = {}  # Tiempo para resetear contador
+        self.alarm_reset_threshold = 300  # 5 minutos para resetear contador
+        self.base_cooldown_period = 20  # Cooldown base del relé (20 segundos)
+        self.progressive_cooldown_reduction = 0.7  # Factor de reducción progresiva
+        self.progressive_threshold_reduction = 0.7  # Factor de reducción progresiva para threshold de desconocidos
 
     def _setup_alarm_relay(self):
         """Configura relé de alarma"""
@@ -262,11 +276,9 @@ class SurveillanceService:
                             detected_names, processed_frame, detection_stats = self._process_frame_for_surveillance(latest_frame, camera_id)
                             self._add_processed_frame_to_buffer(camera_id, processed_frame)
                             
-                            # # Imprimir estadísticas de detección
-                            # if detection_stats["person_count"] > 0 or detection_stats["face_count"] > 0:
-                            #     if detection_stats["person_count"] != detection_stats["face_count"]:
-                            #         print("Discrepancia detectada en", camera_id , "numero de rostros: ",detection_stats["face_count"], "numero de personas: ",detection_stats["person_count"])
-
+                            # Verificar discrepancias de detección (más personas que rostros)
+                            self._check_discrepancy_persistence(camera_id, detection_stats)
+                            
                             # Verificar desconocidos persistentes
                             self._check_unknown_persistence(camera_id, detected_names)
                             
@@ -281,7 +293,7 @@ class SurveillanceService:
                                     current_time - self.last_access_control_call[camera_id] >= self.access_control_cooldown):
                                     
                                     self.last_access_control_call[camera_id] = current_time
-                                    self._notify_access_control(camera_id, detected_names)
+                                    self._notify_access_control(camera_id, detected_names, detection_stats)
 
                     time.sleep(0.001)
                     
@@ -301,7 +313,9 @@ class SurveillanceService:
             self.processed_frame_buffers,
             self.frame_counters,
             self.unknown_detection_start,
-            self.unknown_alert_sent
+            self.unknown_alert_sent,
+            self.alarm_activation_count,
+            self.alarm_reset_time
         ]
         
         for resource_dict in resources_to_clean:
@@ -367,17 +381,16 @@ class SurveillanceService:
         
         # Detectar discrepancias (más personas que rostros detectados)
         if person_count > face_count and person_count > 0:
-            discrepancy_text = f"⚠️ ALERTA: {person_count - face_count} persona(s) sin rostro detectado"
+            discrepancy_count = person_count - face_count
+            discrepancy_text = f"⚠️ ALERTA: {discrepancy_count} persona(s) sin rostro detectado"
             cv2.putText(processed_frame, discrepancy_text, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
             
-            # Log de la discrepancia
-            self.log_access(
-                person_id=f"discrepancy_{camera_id}_{int(time.time())}",
-                name="Discrepancia de Detección",
-                event_type="alerta_discrepancia",
-                camera_id=camera_id,
-                confidence=1.0
-            )
+            # Agregar indicador visual de tiempo de discrepancia si está en progreso
+            if camera_id in self.discrepancy_detection_start:
+                elapsed_time = time.time() - self.discrepancy_detection_start[camera_id]
+                remaining_time = max(0, self.discrepancy_persistence_threshold - elapsed_time)
+                time_text = f"Alarma en: {remaining_time:.1f}s"
+                cv2.putText(processed_frame, time_text, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
         
         return detected_names, processed_frame, {"person_count": person_count, "face_count": face_count}
 
@@ -445,18 +458,19 @@ class SurveillanceService:
 
     # ==================== MÉTODOS DE CONTROL DE ACCESO ====================
     
-    def _notify_access_control(self, camera_id: str, detected_names: list):
+    def _notify_access_control(self, camera_id: str, detected_names: list, detection_stats: dict):
         """Notifica al servicio de control de acceso sobre las detecciones"""
         try:
             self.network_executor.submit(
                 self._call_access_control,
                 camera_id,
-                detected_names
+                detected_names,
+                detection_stats
             )
         except Exception as e:
             print(f"❌ Error notificando control de acceso: {e}")
     
-    def _call_access_control(self, camera_id: str, detected_names: list):
+    def _call_access_control(self, camera_id: str, detected_names: list, detection_stats: dict):
         """Llama al servicio de control de acceso de forma síncrona"""
         try:
             import asyncio
@@ -471,7 +485,8 @@ class SurveillanceService:
                     access_control_service.evaluate_access(
                         camera_id, 
                         detected_names, 
-                        datetime.now()
+                        datetime.now(),
+                        detection_stats
                     )
                 )
                 
@@ -495,6 +510,36 @@ class SurveillanceService:
 
     # ==================== MÉTODOS DE DETECCIÓN DE DESCONOCIDOS ====================
     
+    def _check_discrepancy_persistence(self, camera_id: str, detection_stats: dict):
+        """Verifica si hay discrepancias persistentes (más personas que rostros) y activa alarma"""
+        current_time = time.time()
+        person_count = detection_stats["person_count"]
+        face_count = detection_stats["face_count"]
+        has_discrepancy = person_count > face_count and person_count > 0
+        
+        if has_discrepancy:
+            discrepancy_count = person_count - face_count
+            # Iniciar o continuar detección de discrepancia
+            if camera_id not in self.discrepancy_detection_start:
+                self.discrepancy_detection_start[camera_id] = current_time
+                print(f"🔍 Iniciando detección de discrepancia persistente en {camera_id}: {discrepancy_count} persona(s) sin rostro")
+            
+            # Verificar si ha pasado el tiempo umbral
+            elapsed_time = current_time - self.discrepancy_detection_start[camera_id]
+            
+            if (elapsed_time >= self.discrepancy_persistence_threshold and 
+                (camera_id not in self.discrepancy_alert_sent or 
+                 current_time - self.discrepancy_alert_sent[camera_id] >= self.discrepancy_alert_cooldown)):
+                
+                print(f"🚨 Discrepancia persistente detectada en {camera_id}: {discrepancy_count} persona(s) sin identificar por {elapsed_time:.1f} segundos")
+                self._notify_discrepancy_with_alarm(camera_id, discrepancy_count)
+                self.discrepancy_alert_sent[camera_id] = current_time
+        else:
+            # Limpiar detección si no hay discrepancias
+            if camera_id in self.discrepancy_detection_start:
+                del self.discrepancy_detection_start[camera_id]
+                print(f"✅ Detección de discrepancia finalizada en {camera_id}")
+
     def _check_unknown_persistence(self, camera_id: str, detected_names: list):
         """Verifica si hay desconocidos que han permanecido demasiado tiempo"""
         current_time = time.time()
@@ -507,7 +552,11 @@ class SurveillanceService:
             
             time_elapsed = current_time - self.unknown_detection_start[camera_id]
             
-            if time_elapsed >= self.unknown_persistence_threshold:
+            # Calcular threshold progresivo basado en activaciones de alarma
+            activation_count = self.alarm_activation_count.get(camera_id, 0)
+            progressive_threshold = max(5, self.base_unknown_threshold * (self.progressive_threshold_reduction ** activation_count))
+            
+            if time_elapsed >= progressive_threshold:
                 can_alert = True
                 if camera_id in self.unknown_alert_sent:
                     time_since_last_alert = current_time - self.unknown_alert_sent[camera_id]
@@ -516,6 +565,7 @@ class SurveillanceService:
                 
                 if can_alert:
                     self.unknown_alert_sent[camera_id] = current_time
+                    print(f"⏰ Threshold progresivo para {camera_id}: {progressive_threshold:.1f}s (activación #{activation_count + 1})")
                     self._notify_unknown_persistence_with_alarm(camera_id, time_elapsed)
         else:
             if camera_id in self.unknown_detection_start:
@@ -523,6 +573,35 @@ class SurveillanceService:
                 print(f"✅ Desconocido ya no detectado en {camera_id} después de {total_time:.1f}s")
                 del self.unknown_detection_start[camera_id]
     
+    def _notify_discrepancy_with_alarm(self, camera_id: str, discrepancy_count: int):
+        """Notifica sobre discrepancias persistentes y activa relé de alarma"""
+        config = CAMERAS[camera_id]
+        
+        # Verificar si las notificaciones HTTP están habilitadas para esta cámara
+        if not config.get("http_notifications_enabled", False):
+            print(f"� Notificaciones HTTP deshabilitadas para {camera_id}")
+            return
+        
+        print(f"�🚨 ALERTA DE SEGURIDAD: {discrepancy_count} persona(s) sin identificar en cámara {camera_id}")
+        
+        self.log_access(
+            person_id=f"discrepancy_persistent_{camera_id}",
+            name=f"Discrepancia: {discrepancy_count} persona(s) sin rostro",
+            event_type="alerta_discrepancia",
+            camera_id=camera_id,
+            confidence=1.0
+        )
+        
+        # Reiniciar el tiempo de detección de desconocidos después de activar la alarma
+        current_time = time.time()
+        if camera_id in self.unknown_detection_start:
+            self.unknown_detection_start[camera_id] = current_time
+            print(f"� Tiempo de detección de desconocidos reiniciado para {camera_id} (alarma por discrepancia)")
+        
+        # Activar relé y enviar imagen
+        self.network_executor.submit(self._activate_alarm_relay_sync, camera_id)
+        self.network_executor.submit(self._send_discrepancy_alarm_image, camera_id, discrepancy_count)
+
     def _notify_unknown_persistence_with_alarm(self, camera_id: str, time_elapsed: float):
         """Notifica sobre desconocidos persistentes y activa relé de alarma"""
         config = CAMERAS[camera_id]
@@ -545,6 +624,11 @@ class SurveillanceService:
             camera_id=camera_id,
             confidence=1.0
         )
+        
+        # Reiniciar el tiempo de detección de desconocidos después de activar la alarma
+        current_time = time.time()
+        self.unknown_detection_start[camera_id] = current_time
+        print(f"🔄 Tiempo de detección de desconocidos reiniciado para {camera_id}")
         
         # Activar relé y enviar imagen
         self.network_executor.submit(self._activate_alarm_relay_sync, camera_id)
@@ -583,6 +667,49 @@ class SurveillanceService:
             print(f"❌ Error en solicitud de mensaje de acceso a {phone_number}: {e}")
             return False
     
+    def _send_discrepancy_alarm_image(self, camera_id: str, discrepancy_count: int):
+        """Envía imagen en base64 cuando se dispara la alarma por discrepancia"""
+        try:
+            config = CAMERAS[camera_id]
+            
+            # Verificar si las notificaciones HTTP están habilitadas
+            if not config.get("http_notifications_enabled", False):
+                print(f"📵 Notificaciones HTTP deshabilitadas para {camera_id}")
+                return
+            
+            latest_processed_frame = self._get_latest_processed_frame(camera_id)
+            if latest_processed_frame is None:
+                latest_processed_frame = self._get_latest_frame(camera_id)
+                if latest_processed_frame is None:
+                    print(f"❌ No hay frame disponible para enviar imagen de {camera_id}")
+                    return
+            
+            image_base64 = self._frame_to_base64(latest_processed_frame)
+            if not image_base64:
+                print(f"❌ Error al convertir frame a base64 para {camera_id}")
+                return
+            
+            ubication = "Puerta" if camera_id == "cam2" else "Test"
+            caption = f"🚨 ALERTA DE SEGURIDAD\n" \
+                     f"Cámara: {ubication}\n" \
+                     f"{discrepancy_count} persona(s) detectada(s) sin rostro identificable\n" \
+                     f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" \
+                     f"Posible intrusión o persona con rostro oculto"
+            
+            # Obtener números de teléfono específicos de la configuración de la cámara
+            notification_phones = config.get("notification_phones", ["573107834112", "573132843357"])
+            
+            # Enviar a los números configurados para esta cámara
+            for phone in notification_phones:
+                success = self._send_image_notification(phone, image_base64, caption)
+                if success:
+                    print(f"📱 Imagen de alarma por discrepancia enviada exitosamente a {phone} para {camera_id}")
+                else:
+                    print(f"❌ Error al enviar imagen de alarma por discrepancia a {phone} para {camera_id}")
+                    
+        except Exception as e:
+            print(f"❌ Error enviando imagen de alarma por discrepancia: {e}")
+
     def _send_alarm_image(self, camera_id: str, time_str: str):
         """Envía imagen en base64 cuando se dispara la alarma"""
         try:
@@ -674,10 +801,27 @@ class SurveillanceService:
         """Activa el relé de alarma de forma síncrona (para ThreadPoolExecutor)"""
         try:
             current_time = time.time()
+            
+            # Inicializar contadores si no existen
+            if camera_id not in self.alarm_activation_count:
+                self.alarm_activation_count[camera_id] = 0
+                self.alarm_reset_time[camera_id] = current_time
+            
+            # Resetear contador si ha pasado el tiempo umbral
+            if current_time - self.alarm_reset_time[camera_id] > self.alarm_reset_threshold:
+                self.alarm_activation_count[camera_id] = 0
+                self.alarm_reset_time[camera_id] = current_time
+                print(f"🔄 Contador de alarmas reseteado para {camera_id}")
+            
+            # Calcular cooldown progresivo
+            activation_count = self.alarm_activation_count[camera_id]
+            progressive_cooldown = max(1, self.base_cooldown_period * (self.progressive_cooldown_reduction ** activation_count))
+            
+            # Verificar cooldown
             if self.last_alarm_activation:
                 time_since_last = current_time - self.last_alarm_activation
-                if time_since_last < self.alarm_relay_config["cooldown_period"]:
-                    print(f"⏳ Relé de alarma en cooldown ({self.alarm_relay_config['cooldown_period'] - time_since_last:.1f}s restantes)")
+                if time_since_last < progressive_cooldown:
+                    print(f"⏳ Relé de alarma en cooldown ({progressive_cooldown - time_since_last:.1f}s restantes, activación #{activation_count + 1})")
                     return
             
             loop = asyncio.new_event_loop()
@@ -687,7 +831,9 @@ class SurveillanceService:
                 success = loop.run_until_complete(self._activate_alarm_relay())
                 if success:
                     self.last_alarm_activation = current_time
+                    self.alarm_activation_count[camera_id] += 1
                     print(f"🚨 Relé de alarma activado en {self.alarm_relay_config['ip']} por {self.alarm_relay_config['activation_duration']}s")
+                    print(f"📊 Activación #{self.alarm_activation_count[camera_id]} para {camera_id}, próximo cooldown: {progressive_cooldown * self.progressive_cooldown_reduction:.1f}s")
                 else:
                     print(f"❌ Error al activar relé de alarma en {self.alarm_relay_config['ip']}")
             finally:
@@ -792,6 +938,51 @@ class SurveillanceService:
                 "message": f"Error en control manual: {e}",
                 "alarm_relay_active": self.alarm_relay_active
             }
+    
+    def get_alarm_statistics(self, camera_id: str = None) -> dict:
+        """Obtiene estadísticas del sistema de alarmas progresivas"""
+        try:
+            current_time = time.time()
+            
+            if camera_id:
+                # Estadísticas para una cámara específica
+                if camera_id not in self.alarm_activation_count:
+                    return {
+                    "camera_id": camera_id,
+                    "activation_count": 0,
+                    "time_since_reset": 0,
+                    "current_cooldown": self.base_cooldown_period,
+                    "next_cooldown": self.base_cooldown_period * self.progressive_cooldown_reduction,
+                    "current_unknown_threshold": self.base_unknown_threshold,
+                    "next_unknown_threshold": self.base_unknown_threshold * self.progressive_threshold_reduction
+                }
+                
+                activation_count = self.alarm_activation_count[camera_id]
+                time_since_reset = current_time - self.alarm_reset_time[camera_id]
+                current_cooldown = max(1, self.base_cooldown_period * (self.progressive_cooldown_reduction ** activation_count))
+                next_cooldown = max(1, self.base_cooldown_period * (self.progressive_cooldown_reduction ** (activation_count + 1)))
+                current_unknown_threshold = max(5, self.base_unknown_threshold * (self.progressive_threshold_reduction ** activation_count))
+                next_unknown_threshold = max(5, self.base_unknown_threshold * (self.progressive_threshold_reduction ** (activation_count + 1)))
+                
+                return {
+                    "camera_id": camera_id,
+                    "activation_count": activation_count,
+                    "time_since_reset": round(time_since_reset, 1),
+                    "current_cooldown": round(current_cooldown, 1),
+                    "next_cooldown": round(next_cooldown, 1),
+                    "current_unknown_threshold": round(current_unknown_threshold, 1),
+                    "next_unknown_threshold": round(next_unknown_threshold, 1),
+                    "reset_threshold": self.alarm_reset_threshold
+                }
+            else:
+                # Estadísticas para todas las cámaras
+                stats = {}
+                for cam_id in self.alarm_activation_count.keys():
+                    stats[cam_id] = self.get_alarm_statistics(cam_id)
+                return stats
+                
+        except Exception as e:
+            return {"error": f"Error obteniendo estadísticas: {e}"}
 
     # ==================== MÉTODOS DE STREAMING ====================
     

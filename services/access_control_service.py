@@ -21,14 +21,27 @@ class AccessControlService:
         self.relay_timer = None
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="access_control")
         
-    async def evaluate_access(self, camera_id: str, detected_names: List[str], timestamp: datetime) -> Dict:
+    async def evaluate_access(self, camera_id: str, detected_names: List[str], timestamp: datetime, detection_stats: Dict = None) -> Dict:
         """Evalúa si se debe conceder acceso"""
         # Verificaciones de seguridad
         if not detected_names:
             return self._create_response(False, False, "No se detectaron rostros", detected_names)
-            
+        
+        # Verificar que todos los rostros sean conocidos (verdes)
         if self.config["require_all_faces_known"] and "Desconocido" in detected_names:
-            return self._create_response(False, False, "Rostros no reconocidos detectados", detected_names)
+            return self._create_response(False, False, "Rostros no reconocidos detectados (rojos)", detected_names)
+        
+        # Nueva verificación: el número de rostros debe coincidir con el número de personas
+        if detection_stats:
+            person_count = detection_stats.get("person_count", 0)
+            face_count = detection_stats.get("face_count", 0)
+            
+            if person_count != face_count:
+                discrepancy_msg = f"Discrepancia detectada: {person_count} personas vs {face_count} rostros"
+                return self._create_response(False, False, discrepancy_msg, detected_names)
+            
+            if person_count == 0:
+                return self._create_response(False, False, "No se detectaron personas", detected_names)
             
         if self._is_in_cooldown():
             remaining = self._get_cooldown_remaining()
