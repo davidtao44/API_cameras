@@ -1,5 +1,5 @@
 from datetime import datetime
-from app.config.settings import CAMERAS
+from config.settings import CAMERAS
 
 # Diccionario para almacenar estadísticas por cámara
 camera_stats = {

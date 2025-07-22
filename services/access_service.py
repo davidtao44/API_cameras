@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
-from app.models.access_log import AccessLog, AccessLogResponse
-from app.config.firebase import db
+from models.access_log import AccessLog, AccessLogResponse
+from config.firebase import db
 
 class AccessService:
     def __init__(self):
@@ -56,4 +56,4 @@ class AccessService:
 
         return list(current_people.values())
 
-access_service = AccessService() 
+access_service = AccessService()
