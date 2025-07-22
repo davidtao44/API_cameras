@@ -6,7 +6,7 @@ CAMERAS = {
         "auth_required": False,
         "access_control_enabled": False,  # Control de acceso y envio de mensajes por http
         "http_notifications_enabled": False,  # Control de alamar y envio de imagenes por http
-        "notification_phones": ["573107834112", "573132844357"]  # Números específicos por cámara
+        "notification_phones": ["573107834112", "573132843357"]  # Números específicos por cámara
     },
     "cam2": {
         "url": "http://172.16.2.231:8080/NxjRXXU0vFm9fklpQqDbmbz4LBxcnq/mjpeg/wcWasVvhGm/A5vjFix0zS",
@@ -15,7 +15,7 @@ CAMERAS = {
         "auth_required": False,
         "access_control_enabled": True,  # Control de acceso habilitado
         "http_notifications_enabled": True,  # Notificaciones habilitadas
-        "notification_phones": ["573107834112", "573132844357"]  # Solo un número para esta cámara
+        "notification_phones": ["573107834112", "573132843357"]  # Solo un número para esta cámara
     },
     "cam3": {
         "url": "http://172.16.2.231:8080/NxjRXXU0vFm9fklpQqDbmbz4LBxcnq/mjpeg/wcWasVvhGm/lKHQOgspnC",
@@ -23,7 +23,7 @@ CAMERAS = {
         "password": "Tecon2025#",
         "auth_required": False,
         "access_control_enabled": False,  # Control de acceso habilitado
-        "http_notifications_enabled": True,  # Notificaciones habilitadas
-        "notification_phones": ["573107834112", "573132844357"]  # Solo un número para esta cámara
+        "http_notifications_enabled": False,  # Notificaciones habilitadas
+        "notification_phones": ["573107834112", "573132843357"]  # Solo un número para esta cámara
     }
 }

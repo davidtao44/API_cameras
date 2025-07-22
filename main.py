@@ -240,7 +240,7 @@ if __name__ == "__main__":
     # Iniciar el servidor webhook HTTP en un hilo separado
     webhook_thread = threading.Thread(
         target=run_webhook_server,
-        kwargs={"host": "0.0.0.0", "port": 5005},  # Cambiar a puerto 5002
+        kwargs={"host": "0.0.0.0", "port": 5001},  # Cambiar a puerto 5002
         daemon=True,
         name="webhook_server"
     )
@@ -248,5 +248,5 @@ if __name__ == "__main__":
     print("📡 Servidor webhook HTTP iniciado en puerto 5005")
     
     # Iniciar el servidor FastAPI
-    print("🚀 Iniciando servidor FastAPI en puerto 8005")
-    uvicorn.run(app, host="0.0.0.0", port=8005)
+    print("🚀 Iniciando servidor FastAPI en puerto 8000")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
