@@ -86,7 +86,7 @@ class SurveillanceService:
                         # Clase 0 en COCO dataset es 'person'
                         if int(box.cls[0]) == 0:  # person class
                             confidence = float(box.conf[0])
-                            if confidence > 0.5:  # Umbral de confianza
+                            if confidence > 0.9:  # Umbral de confianza
                                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
                                 person_boxes.append((x1, y1, x2, y2, confidence))
                                 person_count += 1
@@ -919,29 +919,6 @@ class SurveillanceService:
             print(f"❌ Error al desactivar relé de alarma: {e}")
             return False
 
-    async def manual_alarm_relay_control(self, activate: bool) -> dict:
-        """Control manual del relé de alarma"""
-        try:
-            if activate:
-                success = await self._activate_alarm_relay()
-                message = "Relé de alarma activado manualmente" if success else "Error al activar relé de alarma"
-            else:
-                success = await self._deactivate_alarm_relay()
-                if self.alarm_relay_timer:
-                    self.alarm_relay_timer.cancel()
-                message = "Relé de alarma desactivado manualmente" if success else "Error al desactivar relé de alarma"
-            
-            return {
-                "success": success,
-                "message": message,
-                "alarm_relay_active": self.alarm_relay_active
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"Error en control manual: {e}",
-                "alarm_relay_active": self.alarm_relay_active
-            }
     
     def get_alarm_statistics(self, camera_id: str = None) -> dict:
         """Obtiene estadísticas del sistema de alarmas progresivas"""
