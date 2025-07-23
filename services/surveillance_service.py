@@ -21,6 +21,8 @@ from config.settings import CAMERAS
 import base64
 # Agregar importación para YOLO
 from ultralytics import YOLO
+# Importar stream_recognizer para usar métodos con ROI
+from services.camera_stream import stream_recognizer
 
 EMBEDDINGS_FILE = "embeddings_arcface.json"
 THRESHOLD = 0.40
@@ -332,11 +334,19 @@ class SurveillanceService:
         """Procesa un frame para vigilancia y devuelve nombres detectados, frame procesado y estadísticas de detección"""
         processed_frame = img.copy()
         
-        # 1. Detección de personas con YOLO
-        person_boxes, person_count = self.detect_persons(img)
+        # Usar métodos con ROI de stream_recognizer para análisis consistente
+        # 1. Detección de personas con ROI
+        person_boxes, person_count = stream_recognizer.detect_persons_with_roi(img, camera_id)
         
-        # 2. Reconocimiento facial con InsightFace
-        faces = self.app.get(img)
+        # 2. Reconocimiento facial con ROI usando el método optimizado
+        # Aplicar ROI para reconocimiento facial
+        roi_img, roi_info = stream_recognizer._apply_roi(img, camera_id)
+        faces = stream_recognizer.app.get(roi_img)
+        
+        # Ajustar coordenadas de caras para la imagen original
+        if roi_info:
+            faces = stream_recognizer._adjust_faces_for_roi(faces, roi_info)
+        
         detected_names = []
         face_count = len(faces)
         
@@ -393,6 +403,9 @@ class SurveillanceService:
                 remaining_time = max(0, self.discrepancy_persistence_threshold - elapsed_time)
                 time_text = f"Alarma en: {remaining_time:.1f}s"
                 cv2.putText(processed_frame, time_text, (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
+        
+        # Dibujar ROI en el frame procesado para consistencia visual
+        processed_frame = stream_recognizer._draw_roi_on_frame(processed_frame, camera_id)
         
         return detected_names, processed_frame, {"person_count": person_count, "face_count": face_count}
 
@@ -495,8 +508,11 @@ class SurveillanceService:
                 if result.get("relay_activated"):
                     names_only = [name.split('_')[0] for name in detected_names if name != "Desconocido"]
                     print(f"🚨 Relé activado - {camera_id}: {names_only}")
-                    self._send_access_message("573107834112", f"Se concedio el acceso a: {', '.join(names_only)}")
-                    self._send_access_message("573132843357", f"Se concedio el acceso a: {', '.join(names_only)}")
+                    # Obtener números de teléfono específicos de la configuración de la cámara
+                    config = CAMERAS[camera_id]
+                    notification_phones = config.get("notification_phones", ["573107834112"])
+                    for number in notification_phones:
+                        self._send_access_message(number, f"Se concedio el acceso a: {', '.join(names_only)}")
                     
                 elif result.get("access_granted"):
                     names_only = [name.split('_')[0] for name in detected_names if name != "Desconocido"]

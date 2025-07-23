@@ -25,7 +25,7 @@ def generate_stream(config, camera_id: str):
         # Solo analizar cada segundo
         if current_time - last_analysis_time >= analysis_interval:
             # Realizar análisis de reconocimiento facial y detección de personas
-            analyzed_frame, names, person_count = stream_recognizer.recognize_for_stream(frame)
+            analyzed_frame, names, person_count = stream_recognizer.recognize_for_stream_optimized(frame, camera_id)
             last_detected_names = names
             last_person_count = person_count
             last_analysis_time = current_time
