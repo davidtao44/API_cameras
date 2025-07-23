@@ -579,12 +579,7 @@ class SurveillanceService:
         """Notifica sobre discrepancias persistentes y activa relé de alarma"""
         config = CAMERAS[camera_id]
         
-        # Verificar si las notificaciones HTTP están habilitadas para esta cámara
-        if not config.get("http_notifications_enabled", False):
-            print(f"� Notificaciones HTTP deshabilitadas para {camera_id}")
-            return
-        
-        print(f"�🚨 ALERTA DE SEGURIDAD: {discrepancy_count} persona(s) sin identificar en cámara {camera_id}")
+        print(f"🚨 ALERTA DE SEGURIDAD: {discrepancy_count} persona(s) sin identificar en cámara {camera_id}")
         
         self.log_access(
             person_id=f"discrepancy_persistent_{camera_id}",
@@ -598,20 +593,23 @@ class SurveillanceService:
         current_time = time.time()
         if camera_id in self.unknown_detection_start:
             self.unknown_detection_start[camera_id] = current_time
-            print(f"� Tiempo de detección de desconocidos reiniciado para {camera_id} (alarma por discrepancia)")
+            print(f"🔄 Tiempo de detección de desconocidos reiniciado para {camera_id} (alarma por discrepancia)")
         
-        # Activar relé y enviar imagen
-        self.network_executor.submit(self._activate_alarm_relay_sync, camera_id)
-        self.network_executor.submit(self._send_discrepancy_alarm_image, camera_id, discrepancy_count)
+        # Activar relé solo si alert_control_enabled está habilitado
+        if config.get("alert_control_enabled", False):
+            self.network_executor.submit(self._activate_alarm_relay_sync, camera_id)
+        else:
+            print(f"🔇 Control de alarma deshabilitado para {camera_id} - relé no activado")
+        
+        # Enviar imagen por WhatsApp solo si whatsapp_notifications_enabled está habilitado
+        if config.get("whatsapp_notifications_enabled", False):
+            self.network_executor.submit(self._send_discrepancy_alarm_image, camera_id, discrepancy_count)
+        else:
+            print(f"📵 Notificaciones WhatsApp deshabilitadas para {camera_id}")
 
     def _notify_unknown_persistence_with_alarm(self, camera_id: str, time_elapsed: float):
         """Notifica sobre desconocidos persistentes y activa relé de alarma"""
         config = CAMERAS[camera_id]
-        
-        # Verificar si las notificaciones HTTP están habilitadas para esta cámara
-        if not config.get("http_notifications_enabled", False):
-            print(f"📵 Notificaciones HTTP deshabilitadas para {camera_id}")
-            return
         
         minutes = int(time_elapsed // 60)
         seconds = int(time_elapsed % 60)
@@ -632,9 +630,17 @@ class SurveillanceService:
         self.unknown_detection_start[camera_id] = current_time
         print(f"🔄 Tiempo de detección de desconocidos reiniciado para {camera_id}")
         
-        # Activar relé y enviar imagen
-        self.network_executor.submit(self._activate_alarm_relay_sync, camera_id)
-        self.network_executor.submit(self._send_alarm_image, camera_id, time_str)
+        # Activar relé solo si alert_control_enabled está habilitado
+        if config.get("alert_control_enabled", False):
+            self.network_executor.submit(self._activate_alarm_relay_sync, camera_id)
+        else:
+            print(f"🔇 Control de alarma deshabilitado para {camera_id} - relé no activado")
+        
+        # Enviar imagen por WhatsApp solo si whatsapp_notifications_enabled está habilitado
+        if config.get("whatsapp_notifications_enabled", False):
+            self.network_executor.submit(self._send_alarm_image, camera_id, time_str)
+        else:
+            print(f"📵 Notificaciones WhatsApp deshabilitadas para {camera_id}")
 
     # ==================== MÉTODOS DE NOTIFICACIONES ====================
     
@@ -674,9 +680,9 @@ class SurveillanceService:
         try:
             config = CAMERAS[camera_id]
             
-            # Verificar si las notificaciones HTTP están habilitadas
-            if not config.get("http_notifications_enabled", False):
-                print(f"📵 Notificaciones HTTP deshabilitadas para {camera_id}")
+            # Verificar si las notificaciones WhatsApp están habilitadas
+            if not config.get("whatsapp_notifications_enabled", False):
+                print(f"📵 Notificaciones WhatsApp deshabilitadas para {camera_id}")
                 return
             
             latest_processed_frame = self._get_latest_processed_frame(camera_id)
@@ -719,9 +725,9 @@ class SurveillanceService:
         try:
             config = CAMERAS[camera_id]
             
-            # Verificar si las notificaciones HTTP están habilitadas
-            if not config.get("http_notifications_enabled", False):
-                print(f"📵 Notificaciones HTTP deshabilitadas para {camera_id}")
+            # Verificar si las notificaciones WhatsApp están habilitadas
+            if not config.get("whatsapp_notifications_enabled", False):
+                print(f"📵 Notificaciones WhatsApp deshabilitadas para {camera_id}")
                 return
             
             latest_processed_frame = self._get_latest_processed_frame(camera_id)
@@ -1084,6 +1090,26 @@ class SurveillanceService:
         self.unknown_alert_cooldown = max(10, alert_cooldown_seconds)
         print(f"⏱️ Umbrales configurados: {self.unknown_persistence_threshold}s persistencia, {self.unknown_alert_cooldown}s cooldown")
 
+    def configure_camera_notifications(self, camera_id: str, enabled: bool, phones: list = None):
+        """Configura las notificaciones WhatsApp para una cámara"""
+        if camera_id in CAMERAS:
+            CAMERAS[camera_id]["whatsapp_notifications_enabled"] = enabled
+            if phones:
+                CAMERAS[camera_id]["notification_phones"] = phones
+            print(f"✅ Notificaciones WhatsApp {'habilitadas' if enabled else 'deshabilitadas'} para {camera_id}")
+            if phones:
+                print(f"📱 Números configurados: {phones}")
+        else:
+            print(f"❌ Cámara {camera_id} no encontrada")
+
+    def configure_camera_alert_control(self, camera_id: str, enabled: bool):
+        """Configura el control de alarma (relé) para una cámara"""
+        if camera_id in CAMERAS:
+            CAMERAS[camera_id]["alert_control_enabled"] = enabled
+            print(f"✅ Control de alarma {'habilitado' if enabled else 'deshabilitado'} para {camera_id}")
+        else:
+            print(f"❌ Cámara {camera_id} no encontrada")
+
     def get_monitoring_stats(self) -> dict:
         """Obtiene estadísticas del monitoreo"""
         buffer_stats = {}
@@ -1122,17 +1148,7 @@ class SurveillanceService:
         else:
             print(f"❌ Cámara {camera_id} no encontrada")
 
-    def configure_camera_notifications(self, camera_id: str, enabled: bool, phones: list = None):
-        """Configura las notificaciones HTTP para una cámara"""
-        if camera_id in CAMERAS:
-            CAMERAS[camera_id]["http_notifications_enabled"] = enabled
-            if phones:
-                CAMERAS[camera_id]["notification_phones"] = phones
-            print(f"✅ Notificaciones HTTP {'habilitadas' if enabled else 'deshabilitadas'} para {camera_id}")
-            if phones:
-                print(f"📱 Números configurados: {phones}")
-        else:
-            print(f"❌ Cámara {camera_id} no encontrada")
+
 
     def get_camera_config(self, camera_id: str) -> dict:
         """Obtiene la configuración actual de una cámara"""
