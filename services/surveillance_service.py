@@ -86,7 +86,7 @@ class SurveillanceService:
                         # Clase 0 en COCO dataset es 'person'
                         if int(box.cls[0]) == 0:  # person class
                             confidence = float(box.conf[0])
-                            if confidence > 0.9:  # Umbral de confianza
+                            if confidence > 0.7:  # Umbral de confianza
                                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
                                 person_boxes.append((x1, y1, x2, y2, confidence))
                                 person_count += 1
@@ -518,7 +518,7 @@ class SurveillanceService:
         person_count = detection_stats["person_count"]
         face_count = detection_stats["face_count"]
         has_discrepancy = person_count > face_count and person_count > 0
-        
+       
         if has_discrepancy:
             discrepancy_count = person_count - face_count
             # Iniciar o continuar detección de discrepancia
