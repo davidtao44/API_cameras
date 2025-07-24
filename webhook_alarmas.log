@@ -248,3 +248,5 @@
 2025-07-23 16:28:28,934 - INFO - Servidor webhook ejecutándose en paralelo con FastAPI
 2025-07-23 16:42:58,934 - INFO - Servidor webhook iniciado en http://0.0.0.0:5001
 2025-07-23 16:42:58,934 - INFO - Servidor webhook ejecutándose en paralelo con FastAPI
+2025-07-24 09:53:28,277 - INFO - Servidor webhook iniciado en http://0.0.0.0:5001
+2025-07-24 09:53:28,278 - INFO - Servidor webhook ejecutándose en paralelo con FastAPI
