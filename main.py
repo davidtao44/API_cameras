@@ -4,7 +4,7 @@ import uvicorn
 import threading
 import time
 from config.firebase import initialize_firebase
-from endpoints import camera, stats, access, relay, access_control
+from endpoints import camera, stats, access, relay, access_control, config
 from services.firebase_service import monitor_firebase_visitors
 from services.surveillance_service import surveillance_service
 
@@ -33,6 +33,7 @@ app.include_router(stats.router)
 app.include_router(access.router)
 app.include_router(relay.router)
 app.include_router(access_control.router)
+app.include_router(config.router)
 
 # Configurar logging para webhook con codificación UTF-8
 webhook_logger = logging.getLogger('webhook')
