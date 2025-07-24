@@ -1,5 +1,9 @@
 from datetime import datetime
+import pytz
 from config.settings import CAMERAS
+
+# Configurar zona horaria de Bogotá, Colombia
+BOGOTA_TZ = pytz.timezone('America/Bogota')
 
 # Diccionario para almacenar estadísticas por cámara
 camera_stats = {
@@ -8,7 +12,7 @@ camera_stats = {
         "recognized": 0,
         "unrecognized": 0,
         "recognized_names": set(),
-        "last_updated": datetime.now()
+        "last_updated": datetime.now(BOGOTA_TZ)
     }
     for cam_id in CAMERAS
 }
@@ -22,7 +26,7 @@ def update_stats(camera_id: str, name: str):
         stats["recognized_names"].add(name)
     else:
         stats["unrecognized"] += 1
-    stats["last_updated"] = datetime.now()
+    stats["last_updated"] = datetime.now(BOGOTA_TZ)
 
 def get_camera_stats(camera_id: str):
     """Obtiene las estadísticas de una cámara específica"""

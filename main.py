@@ -13,8 +13,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import json
 import logging
 from datetime import datetime
+import pytz
 import urllib.parse
 import sys
+
+# Configurar zona horaria de Bogotá, Colombia
+BOGOTA_TZ = pytz.timezone('America/Bogota')
 
 app = FastAPI()
 
@@ -73,7 +77,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
         <p>Listo para recibir alertas de alarmas</p>
         </body>
         </html>
-        """.format(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        """.format(datetime.now(BOGOTA_TZ).strftime("%Y-%m-%d %H:%M:%S"))
         
         self.wfile.write(response.encode('utf-8'))
     
@@ -85,7 +89,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
         # Log detallado de la alarma recibida
         webhook_logger.info("=" * 50)
         webhook_logger.info(f"ALARMA RECIBIDA desde {self.client_address[0]}")
-        webhook_logger.info(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        webhook_logger.info(f"Timestamp: {datetime.now(BOGOTA_TZ).strftime('%Y-%m-%d %H:%M:%S')}")
         webhook_logger.info(f"Path: {self.path}")
         webhook_logger.info(f"Headers: {dict(self.headers)}")
         

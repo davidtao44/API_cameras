@@ -105,7 +105,6 @@ def process_deleted_documents(deleted_doc_ids: set, firebase_mapping: dict, mapp
                         with open(mapping_file, 'w') as f:
                             json.dump(firebase_mapping, f)
                         
-                        # En la línea 108 - función process_deleted_documents
                         stream_recognizer.known_faces = stream_recognizer.load_embeddings(embeddings_file)
                         
                         print(f"Se eliminaron automáticamente {len(deleted_names)} personas: {', '.join(deleted_names)}")
@@ -182,7 +181,6 @@ def process_person_images(doc_data: dict, person_name: str) -> list:
                 if img is None:
                     continue
                 
-                # En la línea 184 - función process_person_images
                 faces = stream_recognizer.app.get(img)
                 if faces:
                     embedding = faces[0].embedding.tolist()
@@ -210,3 +208,21 @@ def save_embeddings_and_mapping(embeddings_file: str, embeddings_data: dict,
         json.dump(firebase_mapping, f)
     
     stream_recognizer.known_faces = stream_recognizer.load_embeddings(embeddings_file)
+
+def save_alert_to_database(alert_data: dict) -> bool:
+    """Guarda una alerta en la base de datos Firebase"""
+    try:
+        if db is None:
+            print("❌ Firebase no está inicializado")
+            return False
+            
+        # Agregar la alerta a la colección 'alerts'
+        doc_ref = db.collection('alerts').document(alert_data['id'])
+        doc_ref.set(alert_data)
+        
+        print(f"✅ Alerta guardada en la base de datos: {alert_data['alert_type']} - {alert_data['camera_id']}")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error guardando alerta en la base de datos: {e}")
+        return False

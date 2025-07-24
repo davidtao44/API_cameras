@@ -9,7 +9,11 @@ import threading
 import time
 from typing import Tuple
 from datetime import datetime
+import pytz
 import asyncio
+
+# Configurar zona horaria de Bogotá, Colombia
+BOGOTA_TZ = pytz.timezone('America/Bogota')
 
 from ultralytics.utils.torch_utils import F
 from services.access_service import access_service
@@ -23,6 +27,9 @@ import base64
 from ultralytics import YOLO
 # Importar stream_recognizer para usar métodos con ROI
 from services.camera_stream import stream_recognizer
+# Importar función para guardar alertas en base de datos
+from services.firebase_service import save_alert_to_database
+from models.alert_log import AlertLog
 
 EMBEDDINGS_FILE = "embeddings_arcface.json"
 THRESHOLD = 0.40
@@ -387,7 +394,7 @@ class SurveillanceService:
         cv2.putText(processed_frame, stats_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         
         # Agregar timestamp
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(BOGOTA_TZ).strftime("%Y-%m-%d %H:%M:%S")
         cv2.putText(processed_frame, timestamp, (10, processed_frame.shape[0] - 10), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
@@ -500,7 +507,7 @@ class SurveillanceService:
                     access_control_service.evaluate_access(
                         camera_id, 
                         detected_names, 
-                        datetime.now(),
+                        datetime.now(BOGOTA_TZ),
                         detection_stats
                     )
                 )
@@ -511,8 +518,41 @@ class SurveillanceService:
                     # Obtener números de teléfono específicos de la configuración de la cámara
                     config = CAMERAS[camera_id]
                     notification_phones = config.get("notification_phones", ["573107834112"])
+                    
+                    # Enviar mensaje de texto
                     for number in notification_phones:
                         self._send_access_message(number, f"Se concedio el acceso a: {', '.join(names_only)}")
+                    
+                    # Enviar imagen con información del acceso si las notificaciones WhatsApp están habilitadas
+                    if config.get("whatsapp_notifications_enabled", False):
+                        self.network_executor.submit(self._send_access_image, camera_id, names_only)
+                    
+                    # Guardar alerta de acceso concedido en la base de datos
+                    try:
+                        camera_location = "Puerta" if camera_id == "cam2" else "Test"
+                        
+                        # Obtener imagen para la alerta
+                        image_base64 = None
+                        latest_processed_frame = self._get_latest_processed_frame(camera_id)
+                        if latest_processed_frame is None:
+                            latest_processed_frame = self._get_latest_frame(camera_id)
+                        if latest_processed_frame is not None:
+                            image_base64 = self._frame_to_base64(latest_processed_frame)
+                        
+                        alert_data = AlertLog(
+                            alert_type="Acceso",
+                            camera_id=camera_id,
+                            camera_location=camera_location,
+                            timestamp=datetime.now(BOGOTA_TZ),
+                            detected_names=names_only,
+                            confidence=max([stats.get('confidence', 0.0) for stats in detection_stats.get('detections', [])]) if detection_stats.get('detections') else 1.0,
+                            description=f"Acceso concedido a: {', '.join(names_only)}",
+                            image_base64=image_base64
+                        )
+                        self.network_executor.submit(save_alert_to_database, alert_data.dict())
+                        print(f"💾 Alerta de acceso guardada en base de datos para {camera_id}")
+                    except Exception as e:
+                        print(f"❌ Error guardando alerta de acceso en base de datos: {e}")
                     
                 elif result.get("access_granted"):
                     names_only = [name.split('_')[0] for name in detected_names if name != "Desconocido"]
@@ -622,6 +662,33 @@ class SurveillanceService:
             self.network_executor.submit(self._send_discrepancy_alarm_image, camera_id, discrepancy_count)
         else:
             print(f"📵 Notificaciones WhatsApp deshabilitadas para {camera_id}")
+        
+        # Guardar alerta de discrepancia en la base de datos
+        try:
+            camera_location = "Puerta" if camera_id == "cam2" else "Test"
+            
+            # Obtener imagen para la alerta
+            image_base64 = None
+            latest_processed_frame = self._get_latest_processed_frame(camera_id)
+            if latest_processed_frame is None:
+                latest_processed_frame = self._get_latest_frame(camera_id)
+            if latest_processed_frame is not None:
+                image_base64 = self._frame_to_base64(latest_processed_frame)
+            
+            alert_data = AlertLog(
+                alert_type="Intruso",
+                camera_id=camera_id,
+                camera_location=camera_location,
+                timestamp=datetime.now(BOGOTA_TZ),
+                detected_names=[],
+                confidence=1.0,
+                description=f"Discrepancia detectada: {discrepancy_count} persona(s) sin rostro identificable",
+                image_base64=image_base64
+            )
+            self.network_executor.submit(save_alert_to_database, alert_data.dict())
+            print(f"💾 Alerta de discrepancia guardada en base de datos para {camera_id}")
+        except Exception as e:
+            print(f"❌ Error guardando alerta de discrepancia en base de datos: {e}")
 
     def _notify_unknown_persistence_with_alarm(self, camera_id: str, time_elapsed: float):
         """Notifica sobre desconocidos persistentes y activa relé de alarma"""
@@ -657,6 +724,33 @@ class SurveillanceService:
             self.network_executor.submit(self._send_alarm_image, camera_id, time_str)
         else:
             print(f"📵 Notificaciones WhatsApp deshabilitadas para {camera_id}")
+        
+        # Guardar alerta de desconocido persistente en la base de datos
+        try:
+            camera_location = "Puerta" if camera_id == "cam2" else "Test"
+            
+            # Obtener imagen para la alerta
+            image_base64 = None
+            latest_processed_frame = self._get_latest_processed_frame(camera_id)
+            if latest_processed_frame is None:
+                latest_processed_frame = self._get_latest_frame(camera_id)
+            if latest_processed_frame is not None:
+                image_base64 = self._frame_to_base64(latest_processed_frame)
+            
+            alert_data = AlertLog(
+                alert_type="Intruso",
+                camera_id=camera_id,
+                camera_location=camera_location,
+                timestamp=datetime.now(BOGOTA_TZ),
+                detected_names=["Desconocido"],
+                confidence=1.0,
+                description=f"Desconocido detectado persistentemente por {time_str}",
+                image_base64=image_base64
+            )
+            self.network_executor.submit(save_alert_to_database, alert_data.dict())
+            print(f"💾 Alerta de intruso guardada en base de datos para {camera_id}")
+        except Exception as e:
+            print(f"❌ Error guardando alerta de intruso en base de datos: {e}")
 
     # ==================== MÉTODOS DE NOTIFICACIONES ====================
     
@@ -691,6 +785,49 @@ class SurveillanceService:
             print(f"❌ Error en solicitud de mensaje de acceso a {phone_number}: {e}")
             return False
     
+    def _send_access_image(self, camera_id: str, names_only: list):
+        """Envía imagen con información del acceso concedido"""
+        try:
+            config = CAMERAS[camera_id]
+            
+            # Verificar si las notificaciones WhatsApp están habilitadas
+            if not config.get("whatsapp_notifications_enabled", False):
+                print(f"📵 Notificaciones WhatsApp deshabilitadas para {camera_id}")
+                return
+            
+            latest_processed_frame = self._get_latest_processed_frame(camera_id)
+            if latest_processed_frame is None:
+                latest_processed_frame = self._get_latest_frame(camera_id)
+                if latest_processed_frame is None:
+                    print(f"❌ No hay frame disponible para enviar imagen de acceso de {camera_id}")
+                    return
+            
+            image_base64 = self._frame_to_base64(latest_processed_frame)
+            if not image_base64:
+                print(f"❌ Error al convertir frame a base64 para {camera_id}")
+                return
+            
+            ubication = "Puerta" if camera_id == "cam2" else "Test"
+            caption = f"✅ ACCESO CONCEDIDO\n" \
+                     f"Cámara: {ubication}\n" \
+                     f"Personas autorizadas: {', '.join(names_only)}\n" \
+                     f"Fecha: {datetime.now(BOGOTA_TZ).strftime('%Y-%m-%d %H:%M:%S')}\n" \
+                     f"Acceso permitido exitosamente"
+            
+            # Obtener números de teléfono específicos de la configuración de la cámara
+            notification_phones = config.get("notification_phones", ["573107834112"])
+            
+            # Enviar a los números configurados para esta cámara
+            for phone in notification_phones:
+                success = self._send_image_notification(phone, image_base64, caption)
+                if success:
+                    print(f"📱 Imagen de acceso concedido enviada exitosamente a {phone} para {camera_id}")
+                else:
+                    print(f"❌ Error al enviar imagen de acceso concedido a {phone} para {camera_id}")
+                    
+        except Exception as e:
+            print(f"❌ Error enviando imagen de acceso concedido: {e}")
+    
     def _send_discrepancy_alarm_image(self, camera_id: str, discrepancy_count: int):
         """Envía imagen en base64 cuando se dispara la alarma por discrepancia"""
         try:
@@ -717,7 +854,7 @@ class SurveillanceService:
             caption = f"🚨 ALERTA DE SEGURIDAD\n" \
                      f"Cámara: {ubication}\n" \
                      f"{discrepancy_count} persona(s) detectada(s) sin rostro identificable\n" \
-                     f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" \
+                     f"Fecha: {datetime.now(BOGOTA_TZ).strftime('%Y-%m-%d %H:%M:%S')}\n" \
                      f"Posible intrusión o persona con rostro oculto\n" \
                      f"Si desea enrrolar al desconocido acceda al link: https://homeface.tecon.com.co/\n" \
                      f"Usuario: devps@tecon.com.co contraseña: admin123 "     
@@ -762,7 +899,7 @@ class SurveillanceService:
             caption = f"🚨 ALERTA DE SEGURIDAD\n" \
                      f"Cámara: {ubication}\n" \
                      f"Desconocido detectado por: {time_str}\n" \
-                     f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n" \
+                     f"Fecha: {datetime.now(BOGOTA_TZ).strftime('%Y-%m-%d %H:%M:%S')}\n" \
                      f"Si desea inscribir a la persona debe acceder al link: https://homeface.tecon.com.co/"
             
             # Obtener números de teléfono específicos de la configuración de la cámara
@@ -1055,7 +1192,7 @@ class SurveillanceService:
 
     def log_access(self, person_id: str, name: str, event_type: str, camera_id: str, confidence: float):
         """Registra un evento de acceso"""
-        current_time = datetime.now()
+        current_time = datetime.now(BOGOTA_TZ)
         
         # Evitar registros duplicados
         if person_id in self.last_detection_time:
