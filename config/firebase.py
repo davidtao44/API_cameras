@@ -19,7 +19,7 @@ def initialize_firebase():
         if not os.path.exists(cred_path):
             cred_path = os.path.join(os.path.dirname(__file__), "..", "..", "keys", "serviceAccountKey.json")
         
-        print(f"🔑 Intentando cargar credenciales desde: {cred_path}")
+        print(f"[INFO] Intentando cargar credenciales desde: {cred_path}")
         
         if not os.path.exists(cred_path):
             raise FileNotFoundError(f"No se encontró el archivo de credenciales en: {cred_path}")
@@ -27,10 +27,10 @@ def initialize_firebase():
         cred = credentials.Certificate(cred_path)
         firebase_admin.initialize_app(cred)
         _firebase_initialized = True
-        print("✅ Firebase inicializado correctamente")
+        print("[INFO] Firebase inicializado correctamente")
         return True
     except Exception as e:
-        print(f"❌ Error al inicializar Firebase: {e}")
+        print(f"[ERROR] Error al inicializar Firebase: {e}")
         return False
 
 # Inicializar Firebase una sola vez al importar el módulo
