@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Response
 from models.schemas import RecognitionStats
 from services.stats_service import get_camera_stats
+from surveillance.frame_processing_service import frame_processing_service
 
 router = APIRouter(prefix="/stats", tags=["statistics"])
 
@@ -35,4 +36,30 @@ def get_recognized_people(camera_id: str):
     return {
         "recognized_people": list(stats["recognized_names"]),
         "count": len(stats["recognized_names"])
+    }
+
+@router.get("/frame-processing")
+def get_frame_processing_stats():
+    """Endpoint para obtener estadísticas del procesamiento centralizado de frames"""
+    return frame_processing_service.get_processing_stats()
+
+@router.get("/frame-processing/{camera_id}")
+def get_camera_processing_status(camera_id: str):
+    """Endpoint para obtener el estado del procesamiento de una cámara específica"""
+    result = frame_processing_service.get_latest_processing_result(camera_id)
+    
+    if not result:
+        return {
+            "camera_id": camera_id,
+            "status": "no_recent_processing",
+            "message": "No hay resultados recientes de procesamiento"
+        }
+    
+    return {
+        "camera_id": camera_id,
+        "status": "active",
+        "last_processing": result.timestamp.isoformat(),
+        "person_count": result.person_count,
+        "face_count": result.face_count,
+        "detected_names": result.detected_names
     }
