@@ -2,13 +2,17 @@ import cv2
 import time
 from services.stats_service import update_stats
 from services.camera_stream import stream_frames_with_digest, stream_frames_without_auth, stream_recognizer
+from surveillance.frame_processing_service import frame_processing_service
 
 def generate_stream(config, camera_id: str):
     url = config["url"]
     
+    # Start frame processing for this camera if not already started
+    frame_processing_service.start_processing_for_camera(camera_id)
+    
     # Control de tiempo para análisis de frames
     last_analysis_time = 0
-    analysis_interval = 0.01  # 1 segundo entre análisis
+    analysis_interval = 0.5  # 500ms entre análisis
     last_detected_names = []  # Mantener últimos nombres detectados
     last_person_count = 0  # Mantener último conteo de personas
     
@@ -22,20 +26,29 @@ def generate_stream(config, camera_id: str):
     for frame in frame_generator:
         current_time = time.time()
         
-        # Solo analizar cada segundo
-        if current_time - last_analysis_time >= analysis_interval:
-            # Realizar análisis de reconocimiento facial y detección de personas
-            analyzed_frame, names, person_count = stream_recognizer.recognize_for_stream_optimized(frame, camera_id)
-            last_detected_names = names
-            last_person_count = person_count
-            last_analysis_time = current_time
+        # Submit frame for background processing
+        frame_processing_service.submit_frame_for_processing(frame, camera_id)
+        
+        # Get latest processing result
+        processing_result = frame_processing_service.get_latest_processing_result(camera_id)
+        
+        if processing_result:
+            # Always use processed frame from centralized service
+            analyzed_frame = processing_result.processed_frame
             
-            # Actualizar estadísticas solo cuando se detectan nombres
-            for name in names:
-                update_stats(camera_id, name)
+            # Update cached data if enough time has passed
+            if current_time - last_analysis_time >= analysis_interval:
+                last_detected_names = processing_result.detected_names
+                last_person_count = processing_result.person_count
+                last_analysis_time = current_time
+                
+                # Actualizar estadísticas solo cuando se detectan nombres
+                for name in last_detected_names:
+                    if name != "Unknown":
+                        update_stats(camera_id, name)
         else:
-            # Solo dibujar las detecciones anteriores sin procesar
-            analyzed_frame = draw_previous_detections(frame, last_detected_names, last_person_count)
+            # Create a basic processed frame while waiting for processing results
+            analyzed_frame = create_waiting_frame(frame, camera_id)
         
         ret, jpeg = cv2.imencode('.jpg', analyzed_frame)
         if not ret:
@@ -44,6 +57,21 @@ def generate_stream(config, camera_id: str):
             b'--frame\r\n'
             b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n'
         )
+
+def create_waiting_frame(frame, camera_id):
+    """Create a basic processed frame while waiting for processing results"""
+    processed_frame = frame.copy()
+    
+    # Add processing status
+    cv2.putText(processed_frame, "Processing...", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+    
+    # Add camera ID
+    cv2.putText(processed_frame, f"Camera: {camera_id}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    
+    # Draw ROI if configured
+    processed_frame = stream_recognizer._draw_roi_on_frame(processed_frame, camera_id)
+    
+    return processed_frame
 
 def draw_previous_detections(frame, names, person_count):
     """Dibuja un indicador simple de las últimas detecciones sin procesar el frame"""

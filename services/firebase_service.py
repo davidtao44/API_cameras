@@ -208,21 +208,3 @@ def save_embeddings_and_mapping(embeddings_file: str, embeddings_data: dict,
         json.dump(firebase_mapping, f)
     
     stream_recognizer.known_faces = stream_recognizer.load_embeddings(embeddings_file)
-
-def save_alert_to_database(alert_data: dict) -> bool:
-    """Guarda una alerta en la base de datos Firebase"""
-    try:
-        if db is None:
-            print("❌ Firebase no está inicializado")
-            return False
-            
-        # Agregar la alerta a la colección 'alerts'
-        doc_ref = db.collection('alerts').document(alert_data['id'])
-        doc_ref.set(alert_data)
-        
-        print(f"✅ Alerta guardada en la base de datos: {alert_data['alert_type']} - {alert_data['camera_id']}")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Error guardando alerta en la base de datos: {e}")
-        return False

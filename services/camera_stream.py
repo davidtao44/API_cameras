@@ -25,7 +25,7 @@ class FaceRecognizer:
         try:
             import onnxruntime as ort
             available_providers = ort.get_available_providers()
-            print(f"🔍 Proveedores ONNX disponibles: {available_providers}")
+            print(f"[INFO] Proveedores ONNX disponibles: {available_providers}")
             
             providers = []
             if 'CUDAExecutionProvider' in available_providers:
@@ -35,39 +35,39 @@ class FaceRecognizer:
                     'cudnn_conv_algo_search': 'EXHAUSTIVE',
                     'do_copy_in_default_stream': True,
                 }))
-                print("✅ Configurando CUDA para GPU")
+                print("[INFO] Configurando CUDA para GPU")
             
             if 'CPUExecutionProvider' in available_providers:
                 providers.append('CPUExecutionProvider')
-                print("✅ CPU como respaldo disponible")
+                print("[INFO] CPU como respaldo disponible")
             
             if not providers:
                 providers = ['CPUExecutionProvider']
-                print("⚠️ Solo CPU disponible")
+                print("[WARNING] Solo CPU disponible")
             
             self.app = FaceAnalysis(providers=providers)
             
             if 'CUDAExecutionProvider' in [p[0] if isinstance(p, tuple) else p for p in providers]:
                 self.app.prepare(ctx_id=0, det_size=(640, 640))
-                print("🚀 InsightFace configurado con GPU")
+                print("[INFO] InsightFace configurado con GPU")
             else:
                 self.app.prepare(ctx_id=-1, det_size=(320, 320))
                 print("🐌 InsightFace configurado con CPU (tamaño reducido)")
                 
         except Exception as e:
-            print(f"❌ Error configurando InsightFace: {str(e)}")
+            print(f"[ERROR] Error configurando InsightFace: {str(e)}")
             self.app = FaceAnalysis(providers=['CPUExecutionProvider'])
             self.app.prepare(ctx_id=-1, det_size=(320, 320))
-            print("🔄 Usando CPU como respaldo")
+            print("[INFO] Usando CPU como respaldo")
         
         # Configuración de YOLO para detección de personas
         try:
             self.yolo_model = YOLO('yolov8n.pt')  # Modelo ligero para detección
             # Configurar explícitamente para usar CPU
             self.yolo_model.to('cpu')
-            print("✅ Modelo YOLO cargado para detección de personas (CPU)")
+            print("[INFO] Modelo YOLO cargado para detección de personas (CPU)")
         except Exception as e:
-            print(f"❌ Error cargando modelo YOLO: {str(e)}")
+            print(f"[ERROR] Error cargando modelo YOLO: {str(e)}")
             self.yolo_model = None
         
         self.known_faces = self.load_embeddings(EMBEDDINGS_FILE)
@@ -109,7 +109,7 @@ class FaceRecognizer:
             return person_boxes, person_count
             
         except Exception as e:
-            print(f"❌ Error en detección de personas: {e}")
+            print(f"[ERROR] Error en detección de personas: {e}")
             return [], 0
     
     def detect_persons_with_roi(self, img, camera_id="default"):
@@ -655,7 +655,7 @@ def stream_frames_with_digest(url, username, password):
 
     with requests.get(url, auth=auth, stream=True) as r:
         if r.status_code != 200:
-            print(f"⚠️ Error al acceder al stream: {r.status_code}")
+            print(f"[WARNING] Error al acceder al stream: {r.status_code}")
             return
 
         bytes_data = b""
@@ -673,7 +673,7 @@ def stream_frames_with_digest(url, username, password):
 def stream_frames_without_auth(url):
     with requests.get(url, stream=True) as r:
         if r.status_code != 200:
-            print(f"⚠️ Error al acceder al stream: {r.status_code}")
+            print(f"[WARNING] Error al acceder al stream: {r.status_code}")
             return
 
         bytes_data = b""
