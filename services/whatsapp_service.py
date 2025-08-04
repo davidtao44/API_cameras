@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 
 # Import configuration
 from config.settings import CAMERAS
-from surveillance.frame_processing_service import frame_processing_service
+from surveillance.enhanced_frame_processing_service import enhanced_frame_processing_service
 
 # Configure timezone
 BOGOTA_TZ = pytz.timezone('America/Bogota')
@@ -107,7 +107,7 @@ class WhatsAppService:
             try:
                 for camera_id in CAMERAS.keys():
                     # Get latest processed frame
-                    processing_result = frame_processing_service.get_latest_processing_result(camera_id)
+                    processing_result = enhanced_frame_processing_service.get_latest_processing_result(camera_id)
                     
                     if processing_result:
                         # Check if this is a new frame (avoid duplicates from cache)

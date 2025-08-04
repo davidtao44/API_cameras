@@ -1,10 +1,11 @@
+from importlib import reload
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import threading
 import time
 from config.firebase import initialize_firebase
-from endpoints import camera, stats, config, whatsapp, auth
+from endpoints import camera, stats, config, whatsapp, auth, relay, visitors, alerts, images, notifications, tracking
 from services.firebase_service import monitor_firebase_visitors
 from surveillance.surveillance_service import surveillance_service
 from auth.dependencies import get_current_active_user
@@ -29,6 +30,12 @@ app.include_router(camera.router)
 app.include_router(stats.router)
 app.include_router(config.router)
 app.include_router(whatsapp.router)
+app.include_router(relay.router)
+app.include_router(visitors.router)
+app.include_router(alerts.router)
+app.include_router(images.router)
+app.include_router(notifications.router)
+app.include_router(tracking.router)
 
 # Inicializar Firebase
 firebase_initialized = initialize_firebase()

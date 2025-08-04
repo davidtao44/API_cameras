@@ -10,7 +10,7 @@ CAMERAS = {
         "notification_phones": ['573107834112', '573222262665'],# '573132843357', '573209838287', '573228097407'],  # Números específicos por cámara
         "video_duration_seconds": 10,
         "roi": {
-            "enabled": True,        # ROI habilitada/deshabilitada
+            "enabled": False,        # ROI habilitada/deshabilitada
             "x": 0.0,               # Coordenada X de inicio (0.0-1.0 para porcentajes)
             "y": 0.0,               # Coordenada Y de inicio (0.0-1.0 para porcentajes)
             "width": 0.3,           # Ancho de la ROI (0.0-1.0 para porcentajes)

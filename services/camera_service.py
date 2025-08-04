@@ -2,13 +2,13 @@ import cv2
 import time
 from services.stats_service import update_stats
 from services.camera_stream import stream_frames_with_digest, stream_frames_without_auth, stream_recognizer
-from surveillance.frame_processing_service import frame_processing_service
+from surveillance.enhanced_frame_processing_service import enhanced_frame_processing_service
 
 def generate_stream(config, camera_id: str):
     url = config["url"]
     
     # Start frame processing for this camera if not already started
-    frame_processing_service.start_processing_for_camera(camera_id)
+    enhanced_frame_processing_service.start_processing_for_camera(camera_id)
     
     # Control de tiempo para análisis de frames
     last_analysis_time = 0
@@ -27,10 +27,10 @@ def generate_stream(config, camera_id: str):
         current_time = time.time()
         
         # Submit frame for background processing
-        frame_processing_service.submit_frame_for_processing(frame, camera_id)
+        enhanced_frame_processing_service.submit_frame_for_processing(frame, camera_id)
         
         # Get latest processing result
-        processing_result = frame_processing_service.get_latest_processing_result(camera_id)
+        processing_result = enhanced_frame_processing_service.get_latest_processing_result(camera_id)
         
         if processing_result:
             # Always use processed frame from centralized service

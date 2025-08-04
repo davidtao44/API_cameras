@@ -9,6 +9,35 @@ from utils.normalizers import normalize_text
 from services.camera_stream import stream_recognizer
 import cv2
 
+def get_firebase_service():
+    """
+    Función para obtener acceso al servicio de Firebase.
+    Retorna la instancia de la base de datos de Firebase.
+    """
+    return db
+
+class FirebaseService:
+    """
+    Clase wrapper para el servicio de Firebase
+    """
+    def __init__(self):
+        self.db = db
+    
+    def get_db(self):
+        return self.db
+
+# Instancia global del servicio
+_firebase_service = None
+
+def get_firebase_db_service():
+    """
+    Función para obtener la instancia del servicio de Firebase con método get_db()
+    """
+    global _firebase_service
+    if _firebase_service is None:
+        _firebase_service = FirebaseService()
+    return _firebase_service
+
 # Variable para almacenar los últimos documentos procesados
 last_processed_docs = set()
 

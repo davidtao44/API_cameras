@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Response, Depends
 from models.schemas import RecognitionStats
 from services.stats_service import get_camera_stats
-from surveillance.frame_processing_service import frame_processing_service
+from surveillance.enhanced_frame_processing_service import enhanced_frame_processing_service
 from auth.dependencies import get_current_active_user
 from models.auth import UserResponse
 
@@ -43,12 +43,12 @@ def get_recognized_people(camera_id: str, current_user: UserResponse = Depends(g
 @router.get("/frame-processing")
 def get_frame_processing_stats(current_user: UserResponse = Depends(get_current_active_user)):
     """Endpoint para obtener estadísticas del procesamiento centralizado de frames"""
-    return frame_processing_service.get_processing_stats()
+    return enhanced_frame_processing_service.get_processing_stats()
 
 @router.get("/frame-processing/{camera_id}")
 def get_camera_processing_status(camera_id: str, current_user: UserResponse = Depends(get_current_active_user)):
     """Endpoint para obtener el estado del procesamiento de una cámara específica"""
-    result = frame_processing_service.get_latest_processing_result(camera_id)
+    result = enhanced_frame_processing_service.get_latest_processing_result(camera_id)
     
     if not result:
         return {
