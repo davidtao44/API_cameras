@@ -3,11 +3,13 @@
 Endpoints for video generation from camera buffers.
 """
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, Depends
 from typing import Optional, List
 from pydantic import BaseModel
 from services.whatsapp_service import whatsapp_service
 from config.settings import CAMERAS
+from auth.dependencies import get_current_active_user, get_admin_user
+from models.auth import UserResponse
 import os
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
@@ -20,7 +22,7 @@ class CustomVideoRequest(BaseModel):
     message: Optional[str] = None
 
 @router.get("/video/{camera_id}")
-def send_video_last_10_seconds(camera_id: str):
+def send_video_last_10_seconds(camera_id: str, current_user: UserResponse = Depends(get_current_active_user)):
     """Create and send video from the last 10 seconds of the specified camera to WhatsApp"""
     if camera_id not in CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -84,7 +86,7 @@ def send_video_last_10_seconds(camera_id: str):
         raise HTTPException(status_code=500, detail=f"Error creating and sending video: {str(e)}")
 
 @router.post("/video/custom")
-def send_custom_duration_video(request: CustomVideoRequest):
+def send_custom_duration_video(request: CustomVideoRequest, current_user: UserResponse = Depends(get_current_active_user)):
     """Create and send a video with custom duration from the specified camera to WhatsApp"""
     if request.camera_id not in CAMERAS:
         raise HTTPException(status_code=404, detail="Camera not found")

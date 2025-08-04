@@ -1,7 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from config.settings import CAMERAS
+from auth.dependencies import get_current_active_user, get_admin_user
+from models.auth import UserResponse
 import json
 import os
 
@@ -19,7 +21,7 @@ class CameraConfigResponse(BaseModel):
     whatsapp_notifications_enabled: bool
 
 @router.get("/cameras")
-def get_all_cameras_config():
+def get_all_cameras_config(current_user: UserResponse = Depends(get_current_active_user)):
     """Obtener la configuración de todas las cámaras"""
     cameras_config = []
     for camera_id, config in CAMERAS.items():
@@ -32,7 +34,7 @@ def get_all_cameras_config():
     return {"cameras": cameras_config}
 
 @router.get("/cameras/{camera_id}")
-def get_camera_config(camera_id: str):
+def get_camera_config(camera_id: str, current_user: UserResponse = Depends(get_current_active_user)):
     """Obtener la configuración de una cámara específica"""
     if camera_id not in CAMERAS:
         raise HTTPException(status_code=404, detail="Cámara no encontrada")
@@ -46,7 +48,7 @@ def get_camera_config(camera_id: str):
     )
 
 @router.put("/cameras/{camera_id}")
-def update_camera_config(camera_id: str, config_update: CameraConfigUpdate):
+def update_camera_config(camera_id: str, config_update: CameraConfigUpdate, current_admin: UserResponse = Depends(get_admin_user)):
     """Actualizar la configuración de una cámara específica"""
     if camera_id not in CAMERAS:
         raise HTTPException(status_code=404, detail="Cámara no encontrada")

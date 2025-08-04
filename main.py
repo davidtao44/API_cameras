@@ -1,12 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import threading
 import time
 from config.firebase import initialize_firebase
-from endpoints import camera, stats, config, whatsapp
+from endpoints import camera, stats, config, whatsapp, auth
 from services.firebase_service import monitor_firebase_visitors
 from surveillance.surveillance_service import surveillance_service
+from auth.dependencies import get_current_active_user
+from models.auth import UserResponse
 
 
 
@@ -22,6 +24,7 @@ app.add_middleware(
 )
 
 # Incluir routers
+app.include_router(auth.router)
 app.include_router(camera.router)
 app.include_router(stats.router)
 app.include_router(config.router)
@@ -31,7 +34,7 @@ app.include_router(whatsapp.router)
 firebase_initialized = initialize_firebase()
 
 @app.get("/")
-def root():
+def root(current_user: UserResponse = Depends(get_current_active_user)):
     return {
         "message": "API de detección de personas funcionando!",
         "status": "Sistema simplificado - Solo detección de personas conocidas/desconocidas"
