@@ -363,6 +363,6 @@ class IntrusionDetectionService:
 
 # Global instance
 intrusion_detection_service = IntrusionDetectionService(
-    intrusion_timer_duration=20,      # Tiempo del timer para cualquier condición de intrusión
+    intrusion_timer_duration=15,      # Tiempo del timer para cualquier condición de intrusión
     alarm_repeat_interval=60         # Intervalo entre alarmas repetitivas (segundos)
 )

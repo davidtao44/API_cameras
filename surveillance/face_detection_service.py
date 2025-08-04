@@ -12,7 +12,7 @@ from typing import List, Tuple, Dict, Any
 import cv2
 
 EMBEDDINGS_FILE = "embeddings_arcface.json"
-THRESHOLD = 0.55
+THRESHOLD = 0.50
 
 class FaceDetectionService:
     """Service for face detection and recognition using InsightFace"""

@@ -20,7 +20,7 @@ from collections import deque
 # Import modular services
 from .face_detection_service import face_detection_service
 from .person_detection_service import person_detection_service
-from .frame_processing_service import frame_processing_service
+from .enhanced_frame_processing_service import enhanced_frame_processing_service
 from .intrusion_detection_service import intrusion_detection_service
 
 # Import existing services
@@ -61,8 +61,8 @@ class SurveillanceService:
         
         print(f"[INFO] Starting automatic monitoring for {camera_id}")
         
-        # Start frame processing service for this camera
-        frame_processing_service.start_processing_for_camera(camera_id)
+        # Start enhanced frame processing service for this camera
+        enhanced_frame_processing_service.start_processing_for_camera(camera_id)
         
         thread = threading.Thread(
             target=self._monitor_camera,
@@ -80,13 +80,13 @@ class SurveillanceService:
             if camera_id in self.monitoring_threads:
                 print(f"[INFO] Stopping monitoring for {camera_id}")
                 # Stop frame processing service for this camera
-                frame_processing_service.stop_processing_for_camera(camera_id)
+                enhanced_frame_processing_service.stop_processing_for_camera(camera_id)
         else:
             print("[INFO] Stopping all monitoring")
             self.monitoring_active = False
             # Stop frame processing service for all cameras
             for cam_id in CAMERAS.keys():
-                frame_processing_service.stop_processing_for_camera(cam_id)
+                enhanced_frame_processing_service.stop_processing_for_camera(cam_id)
     
     def _monitor_camera(self, camera_id: str):
         """Monitor a specific camera for surveillance events"""
@@ -128,15 +128,14 @@ class SurveillanceService:
     
     def _process_surveillance_frame(self, frame: np.ndarray, camera_id: str):
         """Process a single frame for surveillance events"""
-        # Submit frame for background processing
-        frame_processing_service.submit_frame_for_processing(frame, camera_id)
-        
-        # Get latest processing result
-        processing_result = frame_processing_service.get_latest_processing_result(camera_id)
+        # IMPORTANT: Don't submit additional frames to avoid queue conflicts
+        # The stream service (camera_service.py) is already submitting frames to the processing queue
+        # Submitting frames from both services causes intermediate frames and synchronization issues
+        processing_result = enhanced_frame_processing_service.get_latest_processing_result(camera_id)
         
         if not processing_result:
-            # If no recent result available, process immediately
-            processing_result = frame_processing_service.process_frame_immediately(frame, camera_id)
+            # If no recent result available, process immediately without adding to queue
+            processing_result = enhanced_frame_processing_service.process_frame_immediately(frame, camera_id)
         
         person_boxes = processing_result.person_boxes
         face_results = processing_result.face_results
