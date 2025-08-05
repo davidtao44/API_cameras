@@ -5,7 +5,7 @@ from models.relay import (
     RelayConfig, RelayState, RelayCommand, RelayResponse,
     RelayStatus, RelayType, HTTPRelayConfig
 )
-from config.relay_config import get_relay_config, get_all_relay_configs, relay_exists
+from config.relay_config import get_all_relay_configs
 import logging
 
 logger = logging.getLogger(__name__)
@@ -14,18 +14,47 @@ class ShellyRelayService:
     """Servicio para controlar relés Shelly Plus 1 PM mediante API HTTP y RPC"""
     
     def __init__(self):
+        self.relays: Dict[str, RelayConfig] = {}
         self.timeout = 10.0
+        # Cargar configuración estática de relés
+        self._load_static_relay_config()
+    
+    def _load_static_relay_config(self):
+        """Cargar configuración estática de relés desde el archivo de configuración"""
+        try:
+            static_configs = get_all_relay_configs()
+            for relay_id, config in static_configs.items():
+                self.relays[relay_id] = config
+                logger.info(f"Relé estático {relay_id} cargado: {config.name}")
+            logger.info(f"Se cargaron {len(static_configs)} relés desde la configuración estática")
+        except Exception as e:
+            logger.error(f"Error cargando configuración estática de relés: {e}")
+    
+    def add_relay(self, relay_id: str, config: RelayConfig) -> bool:
+        """Agregar un relé a la configuración"""
+        try:
+            self.relays[relay_id] = config
+            logger.info(f"Relé {relay_id} agregado exitosamente")
+            return True
+        except Exception as e:
+            logger.error(f"Error agregando relé {relay_id}: {e}")
+            return False
+    
+    def remove_relay(self, relay_id: str) -> bool:
+        """Remover un relé de la configuración"""
+        if relay_id in self.relays:
+            del self.relays[relay_id]
+            logger.info(f"Relé {relay_id} removido exitosamente")
+            return True
+        return False
     
     def get_relay_config(self, relay_id: str) -> Optional[RelayConfig]:
         """Obtener configuración de un relé"""
-        try:
-            return get_relay_config(relay_id)
-        except ValueError:
-            return None
+        return self.relays.get(relay_id)
     
     def list_relays(self) -> Dict[str, RelayConfig]:
         """Listar todos los relés configurados"""
-        return get_all_relay_configs()
+        return self.relays.copy()
     
     async def _make_http_request(self, url: str, method: str = "GET", data: Optional[Dict] = None) -> Dict[str, Any]:
         """Realizar petición HTTP a dispositivo Shelly"""
@@ -49,38 +78,37 @@ class ShellyRelayService:
     
     async def _send_rpc_command(self, ip: str, method: str, params: Dict[str, Any], auth: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Enviar comando RPC a dispositivo Shelly Gen2+"""
-        url = f"http://{ip}/rpc/{method}"
+        url = f"http://{ip}/rpc"
+        
+        # Construir frame RPC
+        rpc_frame = {
+            "id": 1,
+            "method": method,
+            "params": params
+        }
         
         try:
-            result = await self._make_http_request(url, "POST", params)
-            return result
+            result = await self._make_http_request(url, "POST", rpc_frame)
+            
+            if "error" in result:
+                error = result["error"]
+                raise Exception(f"Error RPC {error.get('code', 'unknown')}: {error.get('message', 'Unknown error')}")
+            
+            return result.get("result", {})
         except Exception as e:
             logger.error(f"Error enviando comando RPC a {ip}: {e}")
             raise
     
-    async def _send_http_relay_command(self, ip: str, channel: int, command: str, timer: Optional[int] = None, auth: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-        """Enviar comando HTTP directo al endpoint /relay/id"""
-        url = f"http://{ip}/relay/{channel}?turn={command}"
-        
-        if timer:
-            url += f"&timer={timer}"
-        
-        try:
-            return await self._make_http_request(url, "GET")
-        except Exception as e:
-            logger.error(f"Error enviando comando HTTP a {ip}: {e}")
-            raise
-    
     async def set_relay_state(self, relay_id: str, command: RelayCommand) -> RelayResponse:
         """Controlar estado del relé"""
-        if not relay_exists(relay_id):
+        if relay_id not in self.relays:
             return RelayResponse(
                 success=False,
                 message=f"Relé {relay_id} no encontrado",
                 relay_id=relay_id
             )
         
-        config = self.get_relay_config(relay_id)
+        config = self.relays[relay_id]
         
         if config.relay_type != RelayType.HTTP:
             return RelayResponse(
@@ -89,18 +117,21 @@ class ShellyRelayService:
                 relay_id=relay_id
             )
         
+        # Convertir configuración a HTTPRelayConfig si es un diccionario
         http_config = config.config
-        
-        # Extraer configuración del diccionario
-        ip_address = http_config.get("ip_address")
-        channel = http_config.get("channel", 0)
-        auth = http_config.get("auth")
-        use_rpc = http_config.get("use_rpc", True)
-        
-        if not ip_address:
+        if isinstance(http_config, dict):
+            try:
+                http_config = HTTPRelayConfig(**http_config)
+            except Exception as e:
+                return RelayResponse(
+                    success=False,
+                    message=f"Configuración HTTP inválida: {str(e)}",
+                    relay_id=relay_id
+                )
+        elif not isinstance(http_config, HTTPRelayConfig):
             return RelayResponse(
                 success=False,
-                message="Dirección IP no configurada",
+                message="Configuración HTTP inválida",
                 relay_id=relay_id
             )
         
@@ -108,7 +139,7 @@ class ShellyRelayService:
             # Usar RPC para comandos más avanzados
             if command.action in ["on", "off"]:
                 params = {
-                    "id": channel,
+                    "id": http_config.channel,
                     "on": command.action == "on"
                 }
                 
@@ -116,10 +147,10 @@ class ShellyRelayService:
                     params["toggle_after"] = command.timer_seconds
                 
                 result = await self._send_rpc_command(
-                    ip_address,
+                    http_config.ip_address,
                     "Switch.Set",
                     params,
-                    auth
+                    http_config.auth
                 )
                 
                 return RelayResponse(
@@ -131,10 +162,10 @@ class ShellyRelayService:
             
             elif command.action == "toggle":
                 result = await self._send_rpc_command(
-                    ip_address,
+                    http_config.ip_address,
                     "Switch.Toggle",
-                    {"id": channel},
-                    auth
+                    {"id": http_config.channel},
+                    http_config.auth
                 )
                 
                 return RelayResponse(
@@ -161,14 +192,14 @@ class ShellyRelayService:
     
     async def get_relay_status(self, relay_id: str) -> RelayResponse:
         """Obtener estado actual del relé"""
-        if not relay_exists(relay_id):
+        if relay_id not in self.relays:
             return RelayResponse(
                 success=False,
                 message=f"Relé {relay_id} no encontrado",
                 relay_id=relay_id
             )
         
-        config = self.get_relay_config(relay_id)
+        config = self.relays[relay_id]
         
         if config.relay_type != RelayType.HTTP:
             return RelayResponse(
@@ -177,27 +208,31 @@ class ShellyRelayService:
                 relay_id=relay_id
             )
         
+        # Convertir configuración a HTTPRelayConfig si es un diccionario
         http_config = config.config
-        
-        # Extraer configuración del diccionario
-        ip_address = http_config.get("ip_address")
-        channel = http_config.get("channel", 0)
-        auth = http_config.get("auth")
-        
-        if not ip_address:
+        if isinstance(http_config, dict):
+            try:
+                http_config = HTTPRelayConfig(**http_config)
+            except Exception as e:
+                return RelayResponse(
+                    success=False,
+                    message=f"Configuración HTTP inválida: {str(e)}",
+                    relay_id=relay_id
+                )
+        elif not isinstance(http_config, HTTPRelayConfig):
             return RelayResponse(
                 success=False,
-                message="Dirección IP no configurada",
+                message="Configuración HTTP inválida",
                 relay_id=relay_id
             )
         
         try:
             # Obtener estado usando RPC
             result = await self._send_rpc_command(
-                ip_address,
+                http_config.ip_address,
                 "Switch.GetStatus",
-                {"id": channel},
-                auth
+                {"id": http_config.channel},
+                http_config.auth
             )
             
             # Crear objeto RelayState con la información obtenida
@@ -231,34 +266,40 @@ class ShellyRelayService:
     
     async def get_device_info(self, relay_id: str) -> RelayResponse:
         """Obtener información del dispositivo Shelly"""
-        if not relay_exists(relay_id):
+        if relay_id not in self.relays:
             return RelayResponse(
                 success=False,
                 message=f"Relé {relay_id} no encontrado",
                 relay_id=relay_id
             )
         
-        config = self.get_relay_config(relay_id)
+        config = self.relays[relay_id]
+        
+        # Convertir configuración a HTTPRelayConfig si es un diccionario
         http_config = config.config
-        
-        # Extraer configuración del diccionario
-        ip_address = http_config.get("ip_address")
-        auth = http_config.get("auth")
-        
-        if not ip_address:
+        if isinstance(http_config, dict):
+            try:
+                http_config = HTTPRelayConfig(**http_config)
+            except Exception as e:
+                return RelayResponse(
+                    success=False,
+                    message=f"Configuración HTTP inválida: {str(e)}",
+                    relay_id=relay_id
+                )
+        elif not isinstance(http_config, HTTPRelayConfig):
             return RelayResponse(
                 success=False,
-                message="Dirección IP no configurada",
+                message="Configuración HTTP inválida",
                 relay_id=relay_id
             )
         
         try:
             # Obtener información del dispositivo
             result = await self._send_rpc_command(
-                ip_address,
+                http_config.ip_address,
                 "Shelly.GetDeviceInfo",
                 {},
-                auth
+                http_config.auth
             )
             
             return RelayResponse(

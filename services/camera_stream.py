@@ -14,7 +14,7 @@ from urllib3.util.retry import Retry
 import math
 # Agregar importación para YOLO
 from ultralytics import YOLO
-from config.settings import CAMERAS
+from config.camera_config import CAMERAS
 
 EMBEDDINGS_FILE = "embeddings_arcface.json"
 THRESHOLD = 0.40

@@ -19,7 +19,7 @@ import pytz
 from dotenv import load_dotenv
 
 # Import configuration
-from config.settings import CAMERAS
+from config.camera_config import CAMERAS
 from surveillance.enhanced_frame_processing_service import enhanced_frame_processing_service
 
 # Configure timezone

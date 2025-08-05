@@ -1,6 +1,6 @@
 from datetime import datetime
 import pytz
-from config.settings import CAMERAS
+from config.camera_config import CAMERAS
 
 # Configurar zona horaria de Bogotá, Colombia
 BOGOTA_TZ = pytz.timezone('America/Bogota')

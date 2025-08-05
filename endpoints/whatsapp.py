@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Response, Depends
 from typing import Optional, List
 from pydantic import BaseModel
 from services.whatsapp_service import whatsapp_service
-from config.settings import CAMERAS
+from config.camera_config import CAMERAS
 from auth.dependencies import get_current_active_user, get_admin_user
 from models.auth import UserResponse
 import os

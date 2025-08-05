@@ -8,7 +8,7 @@ from models.auth import UserResponse
 security = HTTPBearer()
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UserResponse:
-    """Obtiene el usuario actual desde el token JWT usando JOSE"""
+    """Obtiene el usuario actual desde el token PASETO"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -16,7 +16,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     )
     
     try:
-        # Verificar el token usando JOSE
+        # Verificar el token usando PASETO
         token_data = verify_token(credentials.credentials)
         if token_data is None or token_data.user_id is None:
             raise credentials_exception
@@ -47,6 +47,9 @@ def get_admin_user(current_user: UserResponse = Depends(get_current_active_user)
             detail="Not enough permissions"
         )
     return current_user
+
+# Alias para compatibilidad
+get_current_admin_user = get_admin_user
 
 def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> Optional[UserResponse]:
     """Obtiene el usuario actual de forma opcional (puede ser None)"""

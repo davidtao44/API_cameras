@@ -1,5 +1,5 @@
 from typing import Dict, List
-from models.relay import RelayConfig, RelayType, HTTPRelayConfig
+from models.relay import RelayConfig, RelayType
 
 # Configuración estática de relés
 RELAY_CONFIGURATIONS: Dict[str, RelayConfig] = {

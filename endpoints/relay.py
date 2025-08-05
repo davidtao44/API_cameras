@@ -5,7 +5,7 @@ from models.relay import (
     RelayConfigResponse, RelayState, RelayType, HTTPRelayConfig
 )
 from models.auth import UserResponse
-from auth.dependencies import get_current_active_user
+from auth.dependencies import get_current_active_user, get_current_admin_user
 from services.relay_service import relay_service
 import logging
 
@@ -14,25 +14,33 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/relay", tags=["relay"])
 
 
-
 @router.get("/list", response_model=RelayListResponse)
 async def list_relays(
     current_user: UserResponse = Depends(get_current_active_user)
 ):
     """
     Listar todos los relés configurados en el sistema.
-    Muestra información básica de cada relé desde la configuración estática.
     """
     try:
-        from config.relay_config import get_relay_list
+        relays_dict = relay_service.list_relays()
         
-        relay_list = get_relay_list()
+        # Convertir el diccionario a una lista de diccionarios
+        relays_list = [
+            {
+                "relay_id": relay_id,
+                "name": config.name,
+                "description": config.description,
+                "relay_type": config.relay_type,
+                "config": config.config
+            }
+            for relay_id, config in relays_dict.items()
+        ]
         
         return RelayListResponse(
             success=True,
-            message=f"Se encontraron {len(relay_list)} relés configurados",
-            relays=relay_list,
-            total_count=len(relay_list)
+            message=f"Se encontraron {len(relays_list)} relés configurados",
+            relays=relays_list,
+            total_count=len(relays_list)
         )
     
     except Exception as e:
@@ -144,44 +152,9 @@ async def get_relay_status(
             detail=f"Error interno: {str(e)}"
         )
 
-@router.get("/device-info/{relay_id}", response_model=RelayResponse)
-async def get_device_info(
-    relay_id: str,
-    current_user: UserResponse = Depends(get_current_active_user)
-):
-    """
-    Obtener información del dispositivo Shelly (modelo, firmware, etc.).
-    """
-    try:
-        response = await relay_service.get_device_info(relay_id)
-        
-        if not response.success:
-            if "no encontrado" in response.message:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=response.message
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=response.message
-                )
-        
-        return response
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error en get_device_info: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error interno: {str(e)}"
-        )
-
-
 
 # Endpoints de conveniencia para acciones rápidas
-@router.get("/on/{relay_id}", response_model=RelayResponse)
+@router.post("/on/{relay_id}", response_model=RelayResponse)
 async def turn_relay_on(
     relay_id: str,
     timer_seconds: Optional[int] = None,
@@ -195,7 +168,7 @@ async def turn_relay_on(
     command = RelayCommand(action="on", timer_seconds=timer_seconds)
     return await control_relay(relay_id, command, current_user)
 
-@router.get("/off/{relay_id}", response_model=RelayResponse)
+@router.post("/off/{relay_id}", response_model=RelayResponse)
 async def turn_relay_off(
     relay_id: str,
     current_user: UserResponse = Depends(get_current_active_user)
@@ -206,7 +179,7 @@ async def turn_relay_off(
     command = RelayCommand(action="off")
     return await control_relay(relay_id, command, current_user)
 
-@router.get("/toggle/{relay_id}", response_model=RelayResponse)
+@router.post("/toggle/{relay_id}", response_model=RelayResponse)
 async def toggle_relay(
     relay_id: str,
     current_user: UserResponse = Depends(get_current_active_user)

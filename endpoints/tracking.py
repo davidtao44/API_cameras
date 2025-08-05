@@ -1,6 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Any
 from pydantic import BaseModel
+from auth.dependencies import get_current_active_user
+from models.auth import UserResponse
 
 # Importar el servicio de tracking mejorado
 from surveillance.enhanced_frame_processing_service import enhanced_frame_processing_service
@@ -18,7 +20,9 @@ class TrackingConfig(BaseModel):
     iou_threshold: float = 0.3
 
 @router.get("/status")
-async def get_tracking_status() -> Dict[str, Any]:
+async def get_tracking_status(
+    current_user: UserResponse = Depends(get_current_active_user)
+) -> Dict[str, Any]:
     """Obtiene el estado actual del sistema de tracking"""
     try:
         # Obtener estadísticas del servicio mejorado
@@ -45,7 +49,10 @@ async def get_tracking_status() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Error obteniendo estado del tracking: {str(e)}")
 
 @router.post("/configure")
-async def configure_tracking(config: TrackingConfig) -> Dict[str, Any]:
+async def configure_tracking(
+    config: TrackingConfig,
+    current_user: UserResponse = Depends(get_current_active_user)
+) -> Dict[str, Any]:
     """Configura el sistema de tracking"""
     try:
         # Validar modo de tracking
@@ -71,7 +78,10 @@ async def configure_tracking(config: TrackingConfig) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Error configurando tracking: {str(e)}")
 
 @router.post("/mode/{mode}")
-async def set_tracking_mode(mode: str) -> Dict[str, Any]:
+async def set_tracking_mode(
+    mode: str,
+    current_user: UserResponse = Depends(get_current_active_user)
+) -> Dict[str, Any]:
     """Cambia el modo de tracking (básico o mejorado)"""
     try:
         if mode not in ["basic", "enhanced"]:
@@ -88,7 +98,9 @@ async def set_tracking_mode(mode: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Error cambiando modo de tracking: {str(e)}")
 
 @router.post("/enable")
-async def enable_tracking() -> Dict[str, Any]:
+async def enable_tracking(
+    current_user: UserResponse = Depends(get_current_active_user)
+) -> Dict[str, Any]:
     """Activa el sistema de tracking"""
     try:
         enhanced_frame_processing_service.enable_tracking = True
@@ -101,7 +113,9 @@ async def enable_tracking() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Error activando tracking: {str(e)}")
 
 @router.post("/disable")
-async def disable_tracking() -> Dict[str, Any]:
+async def disable_tracking(
+    current_user: UserResponse = Depends(get_current_active_user)
+) -> Dict[str, Any]:
     """Desactiva el sistema de tracking"""
     try:
         enhanced_frame_processing_service.enable_tracking = False
@@ -114,7 +128,10 @@ async def disable_tracking() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Error desactivando tracking: {str(e)}")
 
 @router.get("/stats/{camera_id}")
-async def get_camera_tracking_stats(camera_id: str) -> Dict[str, Any]:
+async def get_camera_tracking_stats(
+    camera_id: str,
+    current_user: UserResponse = Depends(get_current_active_user)
+) -> Dict[str, Any]:
     """Obtiene estadísticas de tracking para una cámara específica"""
     try:
         stats = person_tracking_service.get_tracking_stats(camera_id)
@@ -127,7 +144,10 @@ async def get_camera_tracking_stats(camera_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"Error obteniendo estadísticas: {str(e)}")
 
 @router.post("/cleanup/{camera_id}")
-async def cleanup_camera_tracking(camera_id: str) -> Dict[str, Any]:
+async def cleanup_camera_tracking(
+    camera_id: str,
+    current_user: UserResponse = Depends(get_current_active_user)
+) -> Dict[str, Any]:
     """Limpia todos los tracks de una cámara específica"""
     try:
         person_tracking_service.cleanup_camera(camera_id)

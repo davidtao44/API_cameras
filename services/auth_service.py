@@ -1,19 +1,28 @@
 from datetime import datetime, timedelta
 from typing import Optional
 from passlib.context import CryptContext
-from jose import JWTError, jwt
+import pyseto
+from pyseto import Key
 from firebase_admin import firestore
 from models.auth import UserCreate, UserResponse, TokenData
 from config.firebase import db
 import os
+import json
+import secrets
+from dotenv import load_dotenv
 
-# Configuración de JWT
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-here")
-ALGORITHM = "HS256"
+# Cargar variables de entorno
+load_dotenv()
+
+# Configuración de PASETO
+SECRET_KEY = os.getenv("PASETO_SECRET_KEY", secrets.token_urlsafe(32))
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 # Configuración de hash de contraseñas
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Configuración de claves PASETO
+paseto_key = Key.new(version=4, purpose="local", key=SECRET_KEY.encode())
 
 def hash_password(password: str) -> str:
     """Hashea una contraseña usando bcrypt"""
@@ -24,21 +33,47 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Crea un token JWT de acceso"""
+    """Crea un token PASETO de acceso"""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    to_encode.update({"exp": expire.isoformat()})
+    
+    # Crear token PASETO v4.local (simétrico)
+    token = pyseto.encode(paseto_key, json.dumps(to_encode).encode())
+    return token.decode()
 
 def verify_token(token: str) -> Optional[TokenData]:
-    """Verifica y decodifica un token JWT usando JOSE"""
+    """Verifica y decodifica un token PASETO"""
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        # Decodificar token PASETO v4.local
+        decoded_token = pyseto.decode(paseto_key, token.encode())
+        
+        # El objeto Token tiene un atributo payload que contiene los datos
+        if hasattr(decoded_token, 'payload'):
+            payload_bytes = decoded_token.payload
+        else:
+            # Si es un string/bytes directamente
+            payload_bytes = decoded_token
+        
+        # Convertir a string si es necesario
+        if isinstance(payload_bytes, bytes):
+            payload_str = payload_bytes.decode('utf-8')
+        else:
+            payload_str = str(payload_bytes)
+            
+        payload = json.loads(payload_str)
+        
+        # Verificar expiración
+        exp_str = payload.get("exp")
+        if exp_str:
+            exp_time = datetime.fromisoformat(exp_str)
+            if datetime.utcnow() > exp_time:
+                return None
+        
         email: str = payload.get("sub")
         user_id: str = payload.get("user_id")
         role: str = payload.get("role")
@@ -48,7 +83,8 @@ def verify_token(token: str) -> Optional[TokenData]:
             
         token_data = TokenData(email=email, user_id=user_id, role=role)
         return token_data
-    except JWTError:
+    except (json.JSONDecodeError, ValueError, AttributeError, Exception) as e:
+        print(f"Error verifying token: {e}")
         return None
 
 def create_user(user_data: UserCreate) -> Optional[UserResponse]:
