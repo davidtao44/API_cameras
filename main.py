@@ -1,11 +1,11 @@
-from importlib import reload
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import threading
 import time
 from config.firebase import initialize_firebase
-from endpoints import camera, stats, config, whatsapp, auth, relay, visitors, alerts, images, notifications, tracking
+from config.tls_config import get_uvicorn_ssl_config, print_tls_info
+from endpoints import camera, config, whatsapp, auth, relay
 from services.firebase_service import monitor_firebase_visitors
 from surveillance.surveillance_service import surveillance_service
 from auth.dependencies import get_current_active_user
@@ -27,15 +27,9 @@ app.add_middleware(
 # Incluir routers
 app.include_router(auth.router)
 app.include_router(camera.router)
-app.include_router(stats.router)
 app.include_router(config.router)
 app.include_router(whatsapp.router)
 app.include_router(relay.router)
-app.include_router(visitors.router)
-app.include_router(alerts.router)
-app.include_router(images.router)
-app.include_router(notifications.router)
-app.include_router(tracking.router)
 
 # Inicializar Firebase
 firebase_initialized = initialize_firebase()
@@ -81,5 +75,14 @@ if __name__ == "__main__":
     print("[INFO] Iniciando surveillance automático para cam3")
     
     # Iniciar el servidor FastAPI
+    # Configurar TLS/HTTPS si está disponible
+    ssl_config = get_uvicorn_ssl_config()
+    print_tls_info()
+    
     print("[INFO] Iniciando servidor FastAPI en puerto 8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    if ssl_config:
+        print("[INFO] Servidor iniciando con TLS/HTTPS habilitado")
+        uvicorn.run(app, host="0.0.0.0", port=8000, **ssl_config)
+    else:
+        print("[INFO] Servidor iniciando en modo HTTP (desarrollo)")
+        uvicorn.run(app, host="0.0.0.0", port=8000)
