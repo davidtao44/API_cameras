@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import math
 from dataclasses import dataclass
 from collections import defaultdict
+from .physical_characteristics_service import physical_characteristics_service, PhysicalCharacteristics
+from .physical_identification_service import physical_identification_service
 
 @dataclass
 class PersonTrack:
@@ -21,6 +23,15 @@ class PersonTrack:
     body_position_history: List[Tuple[Tuple[int, int, int, int], datetime]]  # bbox, time
     is_active: bool = True
     confidence_score: float = 0.0
+    # Características físicas para identificación
+    physical_characteristics: Optional[PhysicalCharacteristics] = None
+    physical_id: Optional[str] = None  # ID basado en características físicas
+    physical_confidence: float = 0.0
+    physical_history: List[Tuple[PhysicalCharacteristics, datetime]] = None
+    
+    def __post_init__(self):
+        if self.physical_history is None:
+            self.physical_history = []
     
     def update_face_recognition(self, name: str, confidence: float, bbox: Tuple[int, int, int, int]):
         """Actualiza el reconocimiento facial del track"""
@@ -86,17 +97,137 @@ class PersonTrack:
         """Verifica si el track ha expirado"""
         current_time = datetime.now()
         return (current_time - self.last_seen).total_seconds() > max_age_seconds
+    
+    def update_physical_characteristics(self, characteristics: PhysicalCharacteristics):
+        """Actualiza las características físicas del track"""
+        current_time = datetime.now()
+        self.physical_characteristics = characteristics
+        self.last_seen = current_time
+        
+        # Agregar al historial
+        self.physical_history.append((characteristics, current_time))
+        
+        # Mantener solo las últimas 5 características
+        if len(self.physical_history) > 5:
+            self.physical_history = self.physical_history[-5:]
+        
+        # Generar ID físico basado en características (se actualiza externamente por physical_identification_service)
+        if not self.physical_id:
+            self.physical_id = self._generate_physical_id(characteristics)
+        self.physical_confidence = characteristics.confidence
+    
+    def _generate_physical_id(self, characteristics: PhysicalCharacteristics) -> str:
+        """Genera un ID único basado en características físicas (deprecated - usar physical_identification_service)"""
+        # Este método se mantiene por compatibilidad pero se recomienda usar physical_identification_service
+        components = []
+        
+        # Altura (redondeada a grupos de 10cm)
+        if characteristics.estimated_height_cm:
+            height_group = int(characteristics.estimated_height_cm // 10) * 10
+            components.append(f"H{height_group}")
+        
+        # Colores dominantes (máximo 2)
+        if characteristics.dominant_clothing_colors:
+            colors = characteristics.dominant_clothing_colors[:2]
+            color_code = "".join([c[:2].upper() for c in colors])
+            components.append(f"C{color_code}")
+        
+        # Proporciones corporales
+        if characteristics.body_proportions and 'aspect_ratio' in characteristics.body_proportions:
+            ratio = characteristics.body_proportions['aspect_ratio']
+            ratio_group = "S" if ratio < 2.0 else "M" if ratio < 2.5 else "T"  # Short, Medium, Tall
+            components.append(f"R{ratio_group}")
+        
+        return "_".join(components) if components else "UNKNOWN"
+    
+    def get_physical_similarity(self, other_characteristics: PhysicalCharacteristics) -> float:
+        """Calcula la similitud física con otras características"""
+        if not self.physical_characteristics:
+            return 0.0
+        
+        similarity_score = 0.0
+        total_weight = 0.0
+        
+        # Comparar altura (peso: 0.3)
+        if (self.physical_characteristics.estimated_height_cm and 
+            other_characteristics.estimated_height_cm):
+            height_diff = abs(self.physical_characteristics.estimated_height_cm - 
+                            other_characteristics.estimated_height_cm)
+            height_similarity = max(0, 1 - (height_diff / 30))  # 30cm tolerance
+            similarity_score += height_similarity * 0.3
+            total_weight += 0.3
+        
+        # Comparar colores de ropa (peso: 0.5)
+        if (self.physical_characteristics.dominant_clothing_colors and 
+            other_characteristics.dominant_clothing_colors):
+            common_colors = set(self.physical_characteristics.dominant_clothing_colors) & \
+                          set(other_characteristics.dominant_clothing_colors)
+            max_colors = max(len(self.physical_characteristics.dominant_clothing_colors),
+                           len(other_characteristics.dominant_clothing_colors))
+            color_similarity = len(common_colors) / max_colors if max_colors > 0 else 0
+            similarity_score += color_similarity * 0.5
+            total_weight += 0.5
+        
+        # Comparar proporciones corporales (peso: 0.2)
+        if (self.physical_characteristics.body_proportions and 
+            other_characteristics.body_proportions and
+            'aspect_ratio' in self.physical_characteristics.body_proportions and
+            'aspect_ratio' in other_characteristics.body_proportions):
+            ratio_diff = abs(self.physical_characteristics.body_proportions['aspect_ratio'] - 
+                           other_characteristics.body_proportions['aspect_ratio'])
+            ratio_similarity = max(0, 1 - (ratio_diff / 1.0))  # 1.0 tolerance
+            similarity_score += ratio_similarity * 0.2
+            total_weight += 0.2
+        
+        return similarity_score / total_weight if total_weight > 0 else 0.0
+    
+    def get_identification_info(self) -> Dict[str, Any]:
+        """Obtiene información de identificación combinando facial y física"""
+        # Priorizar reconocimiento facial si está disponible
+        best_face_name, face_confidence = self.get_best_face_name()
+        
+        if best_face_name != "Unknown" and face_confidence > 0.7:
+            return {
+                'identification_type': 'facial',
+                'name': best_face_name,
+                'confidence': face_confidence,
+                'physical_id': self.physical_id,
+                'description': self.physical_characteristics.clothing_description if self.physical_characteristics else ""
+            }
+        elif self.physical_id and self.physical_confidence > 0.5:
+            return {
+                'identification_type': 'physical',
+                'name': f"Persona_{self.physical_id}",
+                'confidence': self.physical_confidence,
+                'physical_id': self.physical_id,
+                'description': self.physical_characteristics.clothing_description if self.physical_characteristics else ""
+            }
+        else:
+            return {
+                'identification_type': 'unknown',
+                'name': "Desconocido",
+                'confidence': 0.0,
+                'physical_id': self.physical_id or "UNKNOWN",
+                'description': self.physical_characteristics.clothing_description if self.physical_characteristics else ""
+            }
 
 class PersonTrackingService:
-    """Servicio de tracking de personas que vincula detección de cuerpo con reconocimiento facial"""
+    """Servicio de tracking de personas que vincula detección de cuerpo con reconocimiento facial y características físicas"""
     
-    def __init__(self):
+    def __init__(self, camera_id="unknown"):
         self.tracks: Dict[str, Dict[int, PersonTrack]] = {}  # camera_id -> {track_id: PersonTrack}
         self.next_track_id: Dict[str, int] = {}  # camera_id -> next_id
         self.face_persistence_time = 10  # segundos para mantener reconocimiento facial
         self.track_max_age = 15  # segundos antes de eliminar un track
         self.max_distance_threshold = 100  # píxeles máximos para asociar cuerpo con cara
         self.iou_threshold = 0.3  # IoU mínimo para asociar detecciones
+        # Configuración para identificación física
+        self.physical_similarity_threshold = 0.7  # Umbral para considerar similitud física
+        self.physical_identification_enabled = True  # Habilitar identificación física
+        self.physical_tracks_db: Dict[str, List[PersonTrack]] = {}  # Base de datos de tracks físicos por cámara
+        self.camera_id = camera_id  # Identificador de la cámara para el registro de identificación física
+        
+        print(f"[INFO] Person Tracking Service initialized with physical identification support for camera: {camera_id}")
         
         print("[INFO] Person Tracking Service initialized")
     
@@ -154,8 +285,54 @@ class PersonTrackingService:
         iou = self.calculate_iou(face_bbox, body_bbox)
         return iou > 0.1  # Mínima superposición requerida
     
+    def find_similar_physical_track(self, camera_id: str, characteristics: PhysicalCharacteristics) -> Optional[PersonTrack]:
+        """Busca un track existente con características físicas similares"""
+        if not self.physical_identification_enabled or camera_id not in self.physical_tracks_db:
+            return None
+        
+        best_track = None
+        best_similarity = 0.0
+        
+        for track in self.physical_tracks_db[camera_id]:
+            if track.physical_characteristics:
+                similarity = track.get_physical_similarity(characteristics)
+                if similarity > self.physical_similarity_threshold and similarity > best_similarity:
+                    best_similarity = similarity
+                    best_track = track
+        
+        return best_track
+    
+    def update_physical_tracks_db(self, camera_id: str, track: PersonTrack):
+        """Actualiza la base de datos de tracks físicos"""
+        if not self.physical_identification_enabled:
+            return
+        
+        if camera_id not in self.physical_tracks_db:
+            self.physical_tracks_db[camera_id] = []
+        
+        # Buscar si ya existe un track similar
+        existing_track = None
+        for existing in self.physical_tracks_db[camera_id]:
+            if existing.track_id == track.track_id:
+                existing_track = existing
+                break
+        
+        if existing_track:
+            # Actualizar track existente
+            existing_track.physical_characteristics = track.physical_characteristics
+            existing_track.physical_id = track.physical_id
+            existing_track.physical_confidence = track.physical_confidence
+        else:
+            # Agregar nuevo track si tiene características físicas
+            if track.physical_characteristics:
+                self.physical_tracks_db[camera_id].append(track)
+        
+        # Limpiar tracks antiguos (mantener solo los últimos 50)
+        if len(self.physical_tracks_db[camera_id]) > 50:
+            self.physical_tracks_db[camera_id] = self.physical_tracks_db[camera_id][-50:]
+    
     def update_tracks(self, camera_id: str, person_boxes: List[Tuple[int, int, int, int, float]], 
-                     face_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                     face_results: List[Dict[str, Any]], frame: Optional[np.ndarray] = None) -> List[Dict[str, Any]]:
         """Actualiza los tracks con nuevas detecciones y devuelve resultados enriquecidos"""
         
         if camera_id not in self.tracks:
@@ -212,6 +389,41 @@ class PersonTrackingService:
                     face_recognition_history=[],
                     body_position_history=[(body_bbox, datetime.now())]
                 )
+                
+                # Analizar características físicas si el frame está disponible
+                if frame is not None and self.physical_identification_enabled:
+                    try:
+                        characteristics = physical_characteristics_service.analyze_person_characteristics(
+                            frame, body_bbox, camera_id
+                        )
+                        
+                        # Registrar en el servicio de identificación física
+                        physical_id = physical_identification_service.register_detection(
+                            characteristics, 
+                            camera_id=self.camera_id
+                        )
+                        
+                        # Buscar track similar existente
+                        similar_track = self.find_similar_physical_track(camera_id, characteristics)
+                        
+                        if similar_track:
+                            # Usar información del track similar para identificación
+                            new_track.physical_characteristics = characteristics
+                            new_track.physical_id = physical_id
+                            new_track.physical_confidence = min(characteristics.confidence, similar_track.physical_confidence)
+                            print(f"[INFO] Track {track_id} asociado con persona física existente: {physical_id}")
+                        else:
+                            # Nuevo track con características únicas
+                            new_track.update_physical_characteristics(characteristics)
+                            new_track.physical_id = physical_id
+                            print(f"[INFO] Nuevo track {track_id} con ID físico: {physical_id}")
+                        
+                        # Actualizar base de datos de tracks físicos
+                        self.update_physical_tracks_db(camera_id, new_track)
+                        
+                    except Exception as e:
+                        print(f"[ERROR] Error analizando características físicas: {e}")
+                
                 current_tracks[track_id] = new_track
         
         # Asociar reconocimientos faciales con tracks
@@ -240,24 +452,61 @@ class PersonTrackingService:
                     face_name, face_confidence, face_bbox
                 )
         
+        # Actualizar características físicas para tracks existentes
+        if frame is not None and self.physical_identification_enabled:
+            for track_id, track in current_tracks.items():
+                try:
+                    # Analizar características físicas periódicamente
+                    time_since_last_analysis = (datetime.now() - track.last_seen).total_seconds()
+                    if time_since_last_analysis > 2.0 or not track.physical_characteristics:  # Cada 2 segundos
+                        characteristics = physical_characteristics_service.analyze_person_characteristics(
+                            frame, track.last_body_bbox, camera_id
+                        )
+                        
+                        # Registrar en el servicio de identificación física
+                        physical_id = physical_identification_service.register_detection(
+                            characteristics, 
+                            camera_id=self.camera_id
+                        )
+                        
+                        track.update_physical_characteristics(characteristics)
+                        track.physical_id = physical_id
+                        self.update_physical_tracks_db(camera_id, track)
+                except Exception as e:
+                    print(f"[ERROR] Error actualizando características físicas para track {track_id}: {e}")
+        
         # Generar resultados enriquecidos
         enriched_results = []
         
         for track_id, track in current_tracks.items():
-            # Obtener el mejor nombre reconocido en la ventana de tiempo
+            # Obtener información de identificación combinada
+            identification_info = track.get_identification_info()
+            
+            # Obtener el mejor nombre reconocido en la ventana de tiempo (para compatibilidad)
             best_name, best_confidence = track.get_best_face_name(self.face_persistence_time)
             
-            # Crear resultado enriquecido
+            # Crear resultado enriquecido con información física
             enriched_result = {
                 'track_id': track_id,
                 'body_bbox': track.last_body_bbox,
                 'face_bbox': track.last_face_bbox,
-                'name': best_name,
-                'confidence': best_confidence,
+                'name': identification_info['name'],
+                'confidence': identification_info['confidence'],
+                'identification_type': identification_info['identification_type'],
+                'physical_id': identification_info['physical_id'],
+                'description': identification_info['description'],
                 'last_face_time': track.last_face_time,
                 'time_since_last_face': (datetime.now() - track.last_face_time).total_seconds(),
-                'is_persistent': best_name != "Unknown" and best_confidence > 0,
-                'recognition_history_count': len(track.face_recognition_history)
+                'is_persistent': identification_info['confidence'] > 0.5,
+                'recognition_history_count': len(track.face_recognition_history),
+                # Información adicional de características físicas
+                'physical_characteristics': {
+                    'estimated_height_cm': track.physical_characteristics.estimated_height_cm if track.physical_characteristics else None,
+                    'dominant_clothing_colors': track.physical_characteristics.dominant_clothing_colors if track.physical_characteristics else [],
+                    'clothing_description': track.physical_characteristics.clothing_description if track.physical_characteristics else "",
+                    'body_proportions': track.physical_characteristics.body_proportions if track.physical_characteristics else {},
+                    'confidence': track.physical_characteristics.confidence if track.physical_characteristics else 0.0
+                }
             }
             enriched_results.append(enriched_result)
         
@@ -300,21 +549,59 @@ class PersonTrackingService:
                 body_center = (int((bx1 + bx2) / 2), int((by1 + by2) / 2))
                 cv2.line(enhanced_frame, face_center, body_center, color, 1)
             
-            # Etiqueta con información del track
-            label = f"ID:{track_id} {name}"
-            if confidence > 0:
-                label += f" ({confidence:.2f})"
-            if time_since_face < self.face_persistence_time:
-                label += f" [{time_since_face:.1f}s]"
+            # Crear etiquetas con información de identificación
+            identification_type = result.get('identification_type', 'unknown')
+            physical_id = result.get('physical_id', '')
+            description = result.get('description', '')
+            
+            # Etiqueta principal
+            if identification_type == 'facial':
+                label = f"ID:{track_id} {name} (Facial {confidence:.2f})"
+            elif identification_type == 'physical':
+                label = f"ID:{track_id} {name} (Físico {confidence:.2f})"
+            else:
+                label = f"ID:{track_id} {name}"
+            
+            # Información adicional
+            info_lines = [label]
+            
+            # Agregar ID físico si está disponible
+            if physical_id and physical_id != 'UNKNOWN':
+                info_lines.append(f"Físico: {physical_id}")
+            
+            # Agregar descripción de ropa si está disponible
+            if description and len(description) > 0:
+                # Truncar descripción si es muy larga
+                desc_short = description[:25] + "..." if len(description) > 25 else description
+                info_lines.append(f"Ropa: {desc_short}")
+            
+            # Agregar altura si está disponible
+            physical_chars = result.get('physical_characteristics', {})
+            if physical_chars.get('estimated_height_cm'):
+                height = physical_chars['estimated_height_cm']
+                info_lines.append(f"Altura: ~{height}cm")
+            
+            # Calcular dimensiones del texto
+            font_scale = 0.5
+            font_thickness = 1
+            line_height = 20
+            max_width = 0
+            
+            for line in info_lines:
+                (text_width, text_height), _ = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)
+                max_width = max(max_width, text_width)
+            
+            total_height = len(info_lines) * line_height + 10
             
             # Fondo para el texto
-            (text_width, text_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-            cv2.rectangle(enhanced_frame, (bx1, by1 - text_height - 10), 
-                         (bx1 + text_width, by1), color, -1)
+            cv2.rectangle(enhanced_frame, (bx1, by1 - total_height), 
+                         (bx1 + max_width + 10, by1), color, -1)
             
-            # Texto
-            cv2.putText(enhanced_frame, label, (bx1, by1 - 5), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            # Dibujar cada línea de texto
+            for i, line in enumerate(info_lines):
+                y_pos = by1 - total_height + (i + 1) * line_height
+                cv2.putText(enhanced_frame, line, (bx1 + 5, y_pos), 
+                           cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), font_thickness)
         
         # Información general del tracking
         active_tracks = len(enriched_results)

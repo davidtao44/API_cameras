@@ -25,7 +25,7 @@ from .intrusion_detection_service import intrusion_detection_service
 
 # Import existing services
 from services.camera_stream import stream_recognizer
-from config.settings import CAMERAS
+from config.camera_config import CAMERAS
 
 # Configure Bogotá, Colombia timezone
 BOGOTA_TZ = pytz.timezone('America/Bogota')

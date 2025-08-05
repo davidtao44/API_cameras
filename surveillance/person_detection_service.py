@@ -149,4 +149,4 @@ class PersonDetectionService:
         self._setup_yolo(model_path)
 
 # Global instance
-person_detection_service = PersonDetectionService(confidence_threshold = 0.8)
+person_detection_service = PersonDetectionService(confidence_threshold = 0.90)

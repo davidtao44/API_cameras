@@ -9,9 +9,9 @@ import threading
 # Importar servicios existentes
 from .person_detection_service import person_detection_service
 from .face_detection_service import face_detection_service
-from .person_tracking_service import person_tracking_service
+from .person_tracking_service import PersonTrackingService
 from services.camera_stream import stream_recognizer
-from config.settings import CAMERAS
+from config.camera_config import CAMERAS
 import pytz
 
 # Configure Bogotá, Colombia timezone
@@ -73,6 +73,9 @@ class EnhancedFrameProcessingService:
         self.enable_tracking = True
         self.tracking_mode = "enhanced"  # "basic" or "enhanced"
         
+        # Person tracking services per camera
+        self.person_tracking_services = {}  # camera_id -> PersonTrackingService
+        
         print("[INFO] Enhanced Frame Processing Service initialized with tracking")
     
     def set_tracking_mode(self, mode: str):
@@ -102,6 +105,10 @@ class EnhancedFrameProcessingService:
         if camera_id not in self.last_processed_frame:
             self.last_processed_frame[camera_id] = 0
         
+        # Initialize person tracking service for this camera
+        if camera_id not in self.person_tracking_services:
+            self.person_tracking_services[camera_id] = PersonTrackingService(camera_id=camera_id)
+        
         # Start background processing thread
         self.processing_active[camera_id] = True
         thread = threading.Thread(
@@ -122,7 +129,9 @@ class EnhancedFrameProcessingService:
             print(f"[INFO] Enhanced frame processing stopped for camera {camera_id}")
         
         # Cleanup tracking data
-        person_tracking_service.cleanup_camera(camera_id)
+        if camera_id in self.person_tracking_services:
+            self.person_tracking_services[camera_id].cleanup_camera(camera_id)
+            del self.person_tracking_services[camera_id]
     
     def submit_frame_for_processing(self, frame: np.ndarray, camera_id: str) -> int:
         """Submit a frame for background processing"""
@@ -223,8 +232,12 @@ class EnhancedFrameProcessingService:
         tracking_results = []
         if self.tracking_mode == "enhanced" and self.enable_tracking:
             try:
-                tracking_results = person_tracking_service.update_tracks(
-                    camera_id, person_boxes, face_results
+                # Get or create person tracking service for this camera
+                if camera_id not in self.person_tracking_services:
+                    self.person_tracking_services[camera_id] = PersonTrackingService(camera_id=camera_id)
+                
+                tracking_results = self.person_tracking_services[camera_id].update_tracks(
+                    camera_id, person_boxes, face_results, frame
                 )
             except Exception as e:
                 print(f"[ERROR] Error in tracking for {camera_id}: {e}")
@@ -260,12 +273,14 @@ class EnhancedFrameProcessingService:
         processed_frame = frame.copy()
         
         # Draw enhanced tracking detections
-        processed_frame = person_tracking_service.draw_enhanced_detections(
-            processed_frame, tracking_results
-        )
-        
-        # Add enhanced statistics
-        tracking_stats = person_tracking_service.get_tracking_stats(camera_id)
+        if camera_id in self.person_tracking_services:
+            processed_frame = self.person_tracking_services[camera_id].draw_enhanced_detections(
+                processed_frame, tracking_results
+            )
+            # Add enhanced statistics
+            tracking_stats = self.person_tracking_services[camera_id].get_tracking_stats(camera_id)
+        else:
+            tracking_stats = {'active_tracks': 0}
         roi_status = "ROI: ON" if roi_info else "ROI: OFF"
         
         stats_text = f"Persons: {len(person_boxes)} | Faces: {len(face_results)} | Tracks: {tracking_stats['active_tracks']} | {roi_status} | Frame: {frame_id}"
@@ -394,8 +409,9 @@ class EnhancedFrameProcessingService:
         # Add tracking statistics
         if self.tracking_mode == "enhanced":
             basic_stats["tracking_stats"] = {
-                camera_id: person_tracking_service.get_tracking_stats(camera_id)
+                camera_id: self.person_tracking_services[camera_id].get_tracking_stats(camera_id)
                 for camera_id in self.processing_active.keys()
+                if camera_id in self.person_tracking_services
             }
         
         return basic_stats
