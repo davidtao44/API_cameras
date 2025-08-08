@@ -4,6 +4,7 @@ Handles all face detection and recognition functionality using InsightFace.
 Separated from the main surveillance service for better modularity.
 """
 
+from cgi import print_form
 import numpy as np
 from insightface.app import FaceAnalysis
 import json
@@ -12,7 +13,7 @@ from typing import List, Tuple, Dict, Any
 import cv2
 
 EMBEDDINGS_FILE = "embeddings_arcface.json"
-THRESHOLD = 0.50
+THRESHOLD = 0.55
 
 class FaceDetectionService:
     """Service for face detection and recognition using InsightFace"""
@@ -51,7 +52,7 @@ class FaceDetectionService:
             self.app = FaceAnalysis(providers=providers)
             
             if 'CUDAExecutionProvider' in [p[0] if isinstance(p, tuple) else p for p in providers]:
-                self.app.prepare(ctx_id=0, det_size=(640, 640))
+                self.app.prepare(ctx_id=0, det_size=(2560, 1440))
                 print("[INFO] InsightFace configured with GPU")
             else:
                 self.app.prepare(ctx_id=-1, det_size=(320, 320))
@@ -70,7 +71,15 @@ class FaceDetectionService:
                 with open(EMBEDDINGS_FILE, 'r') as f:
                     data = json.load(f)
                     for name, embeddings in data.items():
-                        self.known_faces[name] = [np.array(emb) for emb in embeddings]
+                        normalized_embeddings = []
+                        for emb in embeddings:
+                            emb_array = np.array(emb)
+                            # Normalize the embedding
+                            norm = np.linalg.norm(emb_array)
+                            if norm > 0:
+                                emb_array = emb_array / norm
+                            normalized_embeddings.append(emb_array)
+                        self.known_faces[name] = normalized_embeddings
                 print(f"[INFO] Loaded {len(self.known_faces)} known faces")
             else:
                 print(f"[WARNING] Embeddings file {EMBEDDINGS_FILE} not found")
@@ -79,11 +88,12 @@ class FaceDetectionService:
             print(f"[ERROR] Error loading embeddings: {e}")
             self.known_faces = {}
     
-    def detect_faces(self, img: np.ndarray) -> List[Any]:
+    def detect_faces(self, img: np.ndarray, detection_threshold: float = 0.5) -> List[Any]:
         """Detect faces in an image
         
         Args:
             img: Input image as numpy array
+            detection_threshold: Confidence threshold for face detection (0.0 to 1.0)
             
         Returns:
             List of detected face objects
@@ -92,8 +102,10 @@ class FaceDetectionService:
             return []
         
         try:
+            # Get faces and filter by detection confidence
             faces = self.app.get(img)
-            return faces
+            filtered_faces = [face for face in faces if face.det_score >= detection_threshold]
+            return filtered_faces
         except Exception as e:
             print(f"[ERROR] Error detecting faces: {e}")
             return []
@@ -107,61 +119,92 @@ class FaceDetectionService:
         Returns:
             Tuple of (name, confidence_score)
         """
-        if not self.known_faces:
-            return "Unknown", 0.0
+        
+        # Iniciando reconocimiento de rostro
         
         best_match = "Unknown"
         max_similarity = -1
         
+        # Para cada persona conocida, encontrar la mejor coincidencia entre sus embeddings
         for name, embeddings in self.known_faces.items():
-            for known_embedding in embeddings:
+            person_best_similarity = -1
+            # Encontrar la mejor coincidencia para esta persona específica
+            for i, known_embedding in enumerate(embeddings):
                 similarity = self.calculate_similarity(face_embedding, known_embedding)
                 
-                if similarity > THRESHOLD and similarity > max_similarity:
-                    best_match = name
-                    max_similarity = similarity
-        
+                if similarity > person_best_similarity:
+                    person_best_similarity = similarity
+            
+            # Solo considerar esta persona si su mejor coincidencia supera el threshold
+            # y es mejor que cualquier otra persona evaluada hasta ahora
+            if person_best_similarity > THRESHOLD and person_best_similarity > max_similarity:
+                best_match = name
+                max_similarity = person_best_similarity
         return best_match, max_similarity
     
     def calculate_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-        """Calculate cosine similarity between two embeddings
+        """Calculate cosine similarity between two normalized embeddings
         
         Args:
-            embedding1: First embedding vector
-            embedding2: Second embedding vector
+            embedding1: First normalized embedding vector
+            embedding2: Second normalized embedding vector
             
         Returns:
             Similarity score between -1 and 1
         """
         try:
-            return np.dot(embedding1, embedding2) / (np.linalg.norm(embedding1) * np.linalg.norm(embedding2))
+            # Since embeddings are normalized, dot product gives cosine similarity
+            return np.dot(embedding1, embedding2)
         except Exception as e:
             print(f"[ERROR] Error calculating similarity: {e}")
             return 0.0
     
-    def process_faces_in_image(self, img: np.ndarray) -> List[Dict[str, Any]]:
+    def process_faces_in_image(self, img: np.ndarray, min_face_size: int = 30) -> List[Dict[str, Any]]:
         """Detect and recognize all faces in an image
         
         Args:
             img: Input image as numpy array
+            min_face_size: Minimum size (width or height) for a valid face bounding box in pixels
             
         Returns:
             List of dictionaries containing face information
         """
         faces = self.detect_faces(img)
+        
         results = []
         
-        for face in faces:
-            name, confidence = self.recognize_face(face.embedding)
+        for i, face in enumerate(faces):
+            # Get bounding box first to validate size
+            bbox = face.bbox.astype(int).tolist()
+            x1, y1, x2, y2 = bbox
+            
+            # Calculate bounding box dimensions
+            width = x2 - x1
+            height = y2 - y1
+            
+            # Validate minimum face size
+            if width < min_face_size or height < min_face_size:
+                continue  # Skip faces that are too small
+            
+            # Normalize the face embedding
+            embedding = face.embedding
+            norm = np.linalg.norm(embedding)
+            
+            if norm > 0:
+                embedding = embedding / norm
+            else:
+                continue
+            
+            name, confidence = self.recognize_face(embedding)
             
             face_info = {
                 'name': name,
                 'confidence': confidence,
-                'bbox': face.bbox.astype(int).tolist(),
-                'embedding': face.embedding
+                'bbox': bbox,
+                'embedding': embedding,
+                'face_size': {'width': width, 'height': height}
             }
             results.append(face_info)
-        
         return results
     
     def draw_face_detection(self, frame: np.ndarray, face_info: Dict[str, Any]) -> np.ndarray:

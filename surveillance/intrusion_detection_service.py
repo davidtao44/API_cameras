@@ -80,6 +80,12 @@ class IntrusionDetectionService:
         # Alarm tracking for repeat functionality
         self.last_alarm_time: Dict[str, datetime] = {}  # camera_id -> last alarm timestamp
         
+        # Tracking for all persons recognized functionality
+        self.all_recognized_frames: Dict[str, int] = {}  # camera_id -> consecutive frames with all persons recognized
+        self.all_recognized_start_time: Dict[str, datetime] = {}  # camera_id -> timestamp when all recognition started
+        self.frames_required_for_all_recognized = 90  # ~3 seconds at 30 FPS (3 * 30 = 90 frames)
+        self.last_all_recognized_notification: Dict[str, datetime] = {}  # camera_id -> last notification timestamp
+        
         # Configuration
         self.config = {
             'intrusion_timer_duration': intrusion_timer_duration,  # tiempo del timer para cualquier condición de intrusión
@@ -95,20 +101,51 @@ class IntrusionDetectionService:
         )
         self.monitor_thread.start()
         
-        print("[INFO] Intrusion Detection Service initialized with countdown timers")
+        # Intrusion Detection Service initialized with countdown timers
     
-    def analyze_detection_frame(self, camera_id: str, person_count: int, 
+    def analyze_detection_frame(self, camera_id: str, person_count: int,
                               face_count: int, detected_names: List[str],
-                              timestamp: datetime = None) -> List[IntrusionEvent]:
-        """Analyze a detection frame for intrusion patterns"""
+                              timestamp: datetime = None, tracked_persons: List = None) -> List[IntrusionEvent]:
+        """Analyze a detection frame for intrusion patterns with tracking support"""
         if timestamp is None:
             timestamp = datetime.now(BOGOTA_TZ)
         
         with self.lock:
+            
+            # Get all known identities from face detection only
+            face_detected_names = set(detected_names) - {'Unknown'}
+            
+            # Count tracked persons with and without confirmed identities
+            tracked_known_count = 0
+            tracked_unknown_count = 0
+            tracked_known_names = set()
+            
+            if tracked_persons:
+                for person in tracked_persons:
+                    if person.identity_confirmed and person.name and person.name != 'Unknown':
+                        tracked_known_names.add(person.name)
+                        tracked_known_count += 1
+                    else:
+                        # Person is tracked but unknown (orange box)
+                        tracked_unknown_count += 1
+                    
+            # Calculate total known persons (face detected + tracked known)
+            all_known_names = face_detected_names.union(tracked_known_names)
+            total_known_persons = len(all_known_names)
+            
+           
+            # Calculate unknown count: only count truly unknown persons
+            # Don't count tracked persons with confirmed identity as unknown, even without visible face
+            face_detected_unknown = detected_names.count('Unknown')
+            unknown_count = max(0, person_count - total_known_persons)
+            
+            
             # Check conditions for intrusion
-            unknown_count = detected_names.count('Unknown')
-            face_mismatch = person_count > face_count
+            # Face mismatch should only trigger if there are more bodies than faces detected
+            # but we should not count tracked known persons without visible faces as a mismatch
+            face_mismatch = person_count > face_count and unknown_count > 0
             unknown_persons = unknown_count > 0
+            
             
             # Determine if any intrusion condition is met
             intrusion_detected = face_mismatch or unknown_persons
@@ -139,6 +176,9 @@ class IntrusionDetectionService:
                     self._cancel_timer(camera_id, 'intrusion')
                     # Reset counter after cancellation
                     self.no_intrusion_frames[camera_id] = 0
+            
+            # Check for all persons recognized for 3+ seconds
+            self._check_all_persons_recognized(camera_id, person_count, unknown_count, all_known_names, timestamp)
         
         return []
     
@@ -176,8 +216,90 @@ class IntrusionDetectionService:
         
         self.active_timers[timer_key] = timer
         
-        # Print alarm start message
-        print(f"[ALARM] {camera_id}: {condition_name} detected - Countdown started ({countdown_duration}s) | Persons: {person_count}, Faces: {face_count}")
+        # Print alarm start message - commented out for debug clarity
+        # print(f"[ALARM] {camera_id}: {condition_name} detected - Countdown started ({countdown_duration}s) | Persons: {person_count}, Faces: {face_count}")
+    
+    def _check_all_persons_recognized(self, camera_id: str, person_count: int, unknown_count: int, 
+                                    all_known_names: set, timestamp: datetime):
+        """Check if all persons have been recognized for more than 3 seconds"""
+        # Only proceed if there are persons detected and no unknowns
+        if person_count > 0 and unknown_count == 0 and len(all_known_names) > 0:
+            # Increment consecutive frames with all persons recognized
+            self.all_recognized_frames[camera_id] = self.all_recognized_frames.get(camera_id, 0) + 1
+            
+            # Set start time if this is the first frame with all recognized
+            if self.all_recognized_frames[camera_id] == 1:
+                self.all_recognized_start_time[camera_id] = timestamp
+            
+            # Check if we've reached the required duration (3 seconds)
+            if self.all_recognized_frames[camera_id] >= self.frames_required_for_all_recognized:
+                # Check if enough time has passed since last notification (avoid spam)
+                print("Acceso concedido en la camara: ", camera_id)
+                last_notification = self.last_all_recognized_notification.get(camera_id)
+                if (not last_notification or 
+                    (timestamp - last_notification).total_seconds() > 30):  # 30 seconds cooldown
+                    
+                    self._trigger_all_recognized_notification(camera_id, all_known_names, timestamp)
+                    self.last_all_recognized_notification[camera_id] = timestamp
+                
+                # Reset counter after successful notification
+                self.all_recognized_frames[camera_id] = 0
+                if camera_id in self.all_recognized_start_time:
+                    del self.all_recognized_start_time[camera_id]
+        else:
+            # Reset counter if condition is not met
+            self.all_recognized_frames[camera_id] = 0
+            if camera_id in self.all_recognized_start_time:
+                 del self.all_recognized_start_time[camera_id]
+    
+    def _trigger_all_recognized_notification(self, camera_id: str, all_known_names: set, timestamp: datetime):
+        """Trigger notification when all persons have been recognized for 3+ seconds"""
+        # All persons recognized for 3+ seconds
+        
+        # Check if WhatsApp notifications are enabled for this camera
+        from config.camera_config import CAMERAS
+        camera_config = CAMERAS.get(camera_id, {})
+        
+        if not camera_config.get('whatsapp_notifications_enabled', False):
+            # WhatsApp notifications disabled
+            return
+        
+        # Get phone numbers from camera config
+        phone_numbers = camera_config.get('notification_phones', [])
+        if not phone_numbers:
+            print(f"[WARNING] No phone numbers configured for {camera_id}")
+            return
+        
+        # Send WhatsApp notification with video if available
+        if WHATSAPP_AVAILABLE:
+            try:
+                # Create description of recognized persons
+                persons_list = ", ".join(sorted(all_known_names))
+                timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                
+                description = f"✅ *RECONOCIMIENTO COMPLETO* ✅\n\n"
+                description += f"📹 Cámara: {camera_id.upper()}\n"
+                description += f"👥 Todas las personas han sido reconocidas por más de 3 segundos\n"
+                description += f"🆔 Personas identificadas: {persons_list}\n"
+                description += f"🕐 Hora: {timestamp_str}\n\n"
+                description += f"📹 Video de confirmación adjunto"
+                
+                # Send video with recognition confirmation
+                success = whatsapp_service.send_recognition_confirmation_video(
+                    camera_id=camera_id,
+                    phone_numbers=phone_numbers,
+                    recognized_persons=list(all_known_names),
+                    description=description
+                )
+                
+                if success:
+                    # Recognition confirmation video sent
+                    pass
+                else:
+                    print(f"[WARNING] Failed to send recognition confirmation video for {camera_id}")
+                    
+            except Exception as e:
+                 print(f"[ERROR] Error sending recognition confirmation for {camera_id}: {e}")
     
     def _cancel_timer(self, camera_id: str, condition_type: str) -> bool:
         """Cancel active countdown timer"""
@@ -185,7 +307,7 @@ class IntrusionDetectionService:
         if timer_key in self.active_timers:
             self.active_timers[timer_key].is_active = False
             del self.active_timers[timer_key]
-            print(f"[ALARM] {camera_id}: Intrusion condition resolved - Timer cancelled")
+            # print(f"[ALARM] {camera_id}: Intrusion condition resolved - Timer cancelled")
             return True
         return False
     
@@ -223,7 +345,7 @@ class IntrusionDetectionService:
             if time_since_last < self.config['alarm_repeat_interval']:
                 # Too soon for another alarm, restart timer for next check
                 remaining_wait = self.config['alarm_repeat_interval'] - time_since_last
-                print(f"[INFO] {event.camera_id}: Alarm cooldown active, next alarm in {remaining_wait:.1f}s")
+                # print(f"[INFO] {event.camera_id}: Alarm cooldown active, next alarm in {remaining_wait:.1f}s")
                 # Restart timer with remaining cooldown time
                 timer.start_time = current_time
                 timer.countdown_duration = remaining_wait
@@ -236,15 +358,8 @@ class IntrusionDetectionService:
         condition_name = "Face Mismatch" if event.event_type == "face_mismatch" else "Unknown Person"
         timestamp_str = event.timestamp.strftime('%H:%M:%S')
         
-        print(f"\n🚨 ALARM TRIGGERED 🚨")
-        print(f"Camera: {event.camera_id.upper()} | Condition: {condition_name} | Time: {timestamp_str}")
-        print(f"Details: {event.person_count} persons, {event.face_count} faces | Severity: {event.severity.upper()}")
-        if event.event_type == 'face_mismatch':
-            print(f"Issue: {event.person_count - event.face_count} more persons than faces detected")
-        elif event.event_type == 'unknown_person':
-            print(f"Issue: Unknown persons present for {event.unknown_duration:.1f} seconds")
-        print(f"Next alarm possible in: {self.config['alarm_repeat_interval']} seconds")
-        print("")
+        # Mantener solo el mensaje de confirmación de intrusión
+        print(f"[INTRUSION_CONFIRMED] {event.camera_id.upper()}: {condition_name} - Alarm triggered at {timestamp_str}")
         
         # Alarm history removed - simplified logic
         
@@ -257,10 +372,11 @@ class IntrusionDetectionService:
                     person_count=event.person_count,
                     face_count=event.face_count
                 )
-                if whatsapp_success:
-                    print(f"[INFO] WhatsApp notification sent for {event.camera_id}")
-                else:
-                    print(f"[WARNING] WhatsApp notification failed for {event.camera_id}")
+                # WhatsApp notification status - commented for debug clarity
+                # if whatsapp_success:
+                #     print(f"[INFO] WhatsApp notification sent for {event.camera_id}")
+                # else:
+                #     print(f"[WARNING] WhatsApp notification failed for {event.camera_id}")
             except Exception as e:
                 print(f"[ERROR] WhatsApp notification error for {event.camera_id}: {e}")
         
@@ -280,7 +396,7 @@ class IntrusionDetectionService:
                 'countdown_duration': timer.countdown_duration
             }
             
-            print(f"[INFO] Alarm saved to Firebase: {event.event_type}")
+            # print(f"[INFO] Alarm saved to Firebase: {event.event_type}")
             
         except Exception as e:
             print(f"[ERROR] Failed to save alarm to Firebase: {e}")
@@ -324,7 +440,7 @@ class IntrusionDetectionService:
             for key, value in new_config.items():
                 if key in self.config:
                     self.config[key] = value
-                    print(f"[INFO] Updated intrusion detection config: {key} = {value}")
+                    # Updated intrusion detection config
                 else:
                     print(f"[WARNING] Unknown config key: {key}")
     
@@ -345,7 +461,7 @@ class IntrusionDetectionService:
             
             if cancelled_count > 0:
                 target = camera_id if camera_id else "all cameras"
-                print(f"[INFO] Cancelled {cancelled_count} alarm timers for {target}")
+                # Cancelled alarm timers
             
             return cancelled_count
     
@@ -358,7 +474,7 @@ class IntrusionDetectionService:
         # Cancel all active timers
         self.cancel_all_timers()
         
-        print("[INFO] Intrusion Detection Service shutdown complete")
+        # Intrusion Detection Service shutdown complete
 
 
 # Global instance

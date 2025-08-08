@@ -12,7 +12,7 @@ from ultralytics import YOLO
 class PersonDetectionService:
     """Service for detecting persons in images using YOLO"""
     
-    def __init__(self, model_path: str = 'yolov8n.pt', confidence_threshold: float = 0.6):
+    def __init__(self, model_path: str = 'yolov8n.pt', confidence_threshold: float = 0.4):
         self.model = None
         self.confidence_threshold = confidence_threshold
         self._setup_yolo(model_path)
@@ -52,11 +52,14 @@ class PersonDetectionService:
             
             for result in results:
                 boxes = result.boxes
+                
                 if boxes is not None:
                     for box in boxes:
+                        class_id = int(box.cls[0])
+                        confidence = float(box.conf[0])
+                        
                         # Class 0 in COCO dataset is 'person'
-                        if int(box.cls[0]) == 0:  # person class
-                            confidence = float(box.conf[0])
+                        if class_id == 0:  # person class
                             if confidence > self.confidence_threshold:
                                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
                                 person_boxes.append((x1, y1, x2, y2, confidence))
@@ -149,4 +152,4 @@ class PersonDetectionService:
         self._setup_yolo(model_path)
 
 # Global instance
-person_detection_service = PersonDetectionService(confidence_threshold = 0.90)
+person_detection_service = PersonDetectionService(confidence_threshold = 0.8)

@@ -17,7 +17,7 @@ from ultralytics import YOLO
 from config.camera_config import CAMERAS
 
 EMBEDDINGS_FILE = "embeddings_arcface.json"
-THRESHOLD = 0.40
+THRESHOLD = 0.5
 
 class FaceRecognizer:
     def __init__(self):

@@ -45,21 +45,47 @@ class SurveillanceService:
         # Detection tracking for statistics
         self.last_detection_time = {}
         
-        print("[INFO] Surveillance service initialized for person detection")
+        # Surveillance service initialized for person detection
+    
+    def process_access_event(self, access_result):
+        """Procesa un evento de control de acceso"""
+        try:
+            camera_id = access_result.camera_id
+            timestamp = access_result.timestamp
+            
+            # Procesando evento de acceso
+            
+            # Registrar el evento
+            print(
+                f"Access event - Camera: {camera_id}, "
+                f"Access: {'Granted' if access_result.access_granted else 'Denied'}, "
+                f"Persons: {access_result.total_persons}, "
+                f"Identified: {access_result.identified_persons}, "
+                f"Unknown: {access_result.unknown_persons}"
+            )
+            
+            # Si el acceso fue denegado, enviar notificación
+            if not access_result.access_granted:
+                # Enviar notificación de intrusión
+                self._send_intrusion_notification(access_result)
+                
+        except Exception as e:
+            print(f"[ERROR] Error procesando evento de acceso: {str(e)}")
+            print(f"Error processing access event: {str(e)}")
     
     # ==================== MONITORING CONTROL ====================
     
     def start_monitoring(self, camera_id: str = "cam1"):
         """Start automatic monitoring of a specific camera"""
         if camera_id in self.monitoring_threads and self.monitoring_threads[camera_id].is_alive():
-            print(f"[WARNING] Monitoring for {camera_id} is already active")
+            # Monitoring already active
             return
         
         if camera_id not in CAMERAS:
             print(f"[ERROR] Camera {camera_id} not found in configuration")
             return
         
-        print(f"[INFO] Starting automatic monitoring for {camera_id}")
+        # Starting automatic monitoring
         
         # Start enhanced frame processing service for this camera
         enhanced_frame_processing_service.start_processing_for_camera(camera_id)
@@ -78,11 +104,11 @@ class SurveillanceService:
         """Stop monitoring for a specific camera or all cameras"""
         if camera_id:
             if camera_id in self.monitoring_threads:
-                print(f"[INFO] Stopping monitoring for {camera_id}")
+                # Stopping monitoring
                 # Stop frame processing service for this camera
                 enhanced_frame_processing_service.stop_processing_for_camera(camera_id)
         else:
-            print("[INFO] Stopping all monitoring")
+            # Stopping all monitoring
             self.monitoring_active = False
             # Stop frame processing service for all cameras
             for cam_id in CAMERAS.keys():
@@ -95,6 +121,9 @@ class SurveillanceService:
         
         # Initialize tracking for this camera
         self.frame_counters[camera_id] = 0
+        
+        # Start frame processing for this camera to ensure frames are available for WhatsApp
+        enhanced_frame_processing_service.start_processing_for_camera(camera_id)
         
         try:
             if config.get("auth_required", True):
@@ -111,7 +140,10 @@ class SurveillanceService:
                 try:
                     self.frame_counters[camera_id] += 1
                     
-                    # Process every N frames
+                    # Submit frame to processing service for WhatsApp buffer
+                    enhanced_frame_processing_service.submit_frame_for_processing(frame, camera_id)
+                    
+                    # Process every N frames for surveillance analysis
                     if self.frame_counters[camera_id] % self.frame_skip_interval == 0:
                         self._process_surveillance_frame(frame, camera_id)
                     
@@ -147,23 +179,32 @@ class SurveillanceService:
         # Update frame counter
         self.frame_counters[camera_id] = self.frame_counters.get(camera_id, 0) + 1
         
-        # Analyze frame for intrusion patterns
+        # Analyze frame for intrusion patterns with tracking support
         try:
             intrusion_events = intrusion_detection_service.analyze_detection_frame(
                 camera_id=camera_id,
                 person_count=person_count,
                 face_count=face_count,
                 detected_names=detected_names,
-                timestamp=processing_result.timestamp
+                timestamp=processing_result.timestamp,
+                tracked_persons=processing_result.tracked_persons
             )
             
-            # Log intrusion events if any detected
-            if intrusion_events:
-                for event in intrusion_events:
-                    print(f"[INTRUSION] {camera_id}: {event.event_type} - {event.description}")
+            # Log intrusion events if any detected - commented for debug clarity
+            # if intrusion_events:
+            #     for event in intrusion_events:
+            #         # Intrusion event detected
                     
         except Exception as e:
             print(f"[ERROR] Error in intrusion detection for {camera_id}: {e}")
+        
+        # Evaluate access control automatically
+        try:
+            from surveillance.access_control_service import access_control_service
+            access_result = access_control_service.evaluate_access(camera_id)
+            
+        except Exception as e:
+            print(f"[ERROR] Error in access control evaluation for {camera_id}: {e}")
     
     # Removed _create_processed_frame and _adjust_faces_for_roi methods
     # These are now handled by the centralized frame_processing_service
@@ -175,7 +216,7 @@ class SurveillanceService:
         if camera_id in self.frame_counters:
             del self.frame_counters[camera_id]
         
-        print(f"[INFO] Monitoring for {camera_id} stopped")
+        # Monitoring stopped
 
     def update_intrusion_config(self, new_config: Dict[str, Any]) -> bool:
         """Update intrusion detection configuration"""
@@ -323,6 +364,12 @@ class SurveillanceService:
         finally:
             if 'session' in locals():
                 session.close()
+    
+    def _send_access_denied_notification(self, access_result):
+        """Envía notificación de acceso denegado"""
+        # Enviando notificación de acceso denegado
+        # Implementación de notificación aquí
+        pass
     
     def __del__(self):
         """Cleanup on destruction"""

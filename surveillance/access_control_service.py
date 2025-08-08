@@ -8,7 +8,7 @@ import time
 
 # Importar servicios necesarios
 from .enhanced_frame_processing_service import enhanced_frame_processing_service, EnhancedFrameProcessingResult
-from config.settings import CAMERAS
+from config.camera_config import CAMERAS
 from services.relay_service import relay_service
 from models.relay import RelayCommand, RelayStatus
 import pytz
@@ -57,16 +57,23 @@ class AccessControlService:
         self.max_unknown_persons = 0  # Máximo número de personas desconocidas permitidas
         self.access_timeout = 5.0  # Tiempo en segundos para mantener acceso concedido
         
+        # Sistema de envío automático después de 3 segundos
+        self.auto_access_delay = 3.0  # Tiempo en segundos antes de envío automático
+        self.access_timers = {}  # Timers activos por cámara
+        self.access_conditions_met = {}  # Estado de condiciones por cámara
+        self.access_start_times = {}  # Tiempo de inicio de condiciones cumplidas
+        
         # Estadísticas
         self.access_stats = defaultdict(lambda: {
             'total_evaluations': 0,
             'access_granted': 0,
             'access_denied': 0,
             'last_access_time': None,
-            'consecutive_denials': 0
+            'consecutive_denials': 0,
+            'auto_access_triggered': 0
         })
         
-        print("[INFO] Access Control Service initialized")
+        # Access Control Service initialized with auto-access system (3s delay)
     
     def evaluate_access(self, camera_id: str) -> Optional[AccessControlResult]:
         """Evalúa si se debe conceder acceso basado en las condiciones:
@@ -83,7 +90,6 @@ class AccessControlService:
             access_control_enabled = camera_config.get('access_control_enabled', False)
             
             if not access_control_enabled:
-                print(f"[INFO] Control de acceso deshabilitado para cámara {camera_id}")
                 return None
             
             # Obtener el último resultado de procesamiento
@@ -104,9 +110,8 @@ class AccessControlService:
             # Evaluar acceso
             access_result = self._evaluate_access_internal(processing_result)
             
-            # Si se concede el acceso, activar el relé
-            if access_result.access_granted:
-                self._activate_relay()
+            # Manejar sistema de envío automático
+            self._handle_auto_access_system(camera_id, access_result)
             
             # Actualizar cache y estadísticas
             with self.lock:
@@ -123,6 +128,89 @@ class AccessControlService:
             print(f"[ERROR] Error evaluating access for {camera_id}: {e}")
             return None
     
+    def _handle_auto_access_system(self, camera_id: str, access_result: AccessControlResult):
+        """Maneja el sistema de envío automático después de 3 segundos"""
+        current_time = time.time()
+        
+        if access_result.access_granted:
+            # Las condiciones de acceso se cumplen
+            if camera_id not in self.access_conditions_met or not self.access_conditions_met[camera_id]:
+                # Primera vez que se cumplen las condiciones
+                self.access_conditions_met[camera_id] = True
+                self.access_start_times[camera_id] = current_time
+                
+                # Cancelar timer anterior si existe
+                if camera_id in self.access_timers:
+                    self.access_timers[camera_id].cancel()
+                
+                # Crear nuevo timer para envío automático
+                timer = threading.Timer(self.auto_access_delay, self._trigger_auto_access, [camera_id])
+                self.access_timers[camera_id] = timer
+                timer.start()
+                
+                print(f"[ACCESS_TIMER] {camera_id}: Timer iniciado - {self.auto_access_delay}s para notificación")
+            else:
+                # Las condiciones siguen cumpliéndose
+                elapsed_time = current_time - self.access_start_times[camera_id]
+                remaining_time = max(0, self.auto_access_delay - elapsed_time)
+                print(f"[ACCESS_TIMER] {camera_id}: Tiempo restante para notificación: {remaining_time:.1f}s")
+        else:
+            # Las condiciones no se cumplen
+            if camera_id in self.access_conditions_met and self.access_conditions_met[camera_id]:
+                # Se perdieron las condiciones
+                self.access_conditions_met[camera_id] = False
+                
+                # Cancelar timer si existe
+                if camera_id in self.access_timers:
+                    self.access_timers[camera_id].cancel()
+                    del self.access_timers[camera_id]
+                
+                print(f"[ACCESS_TIMER] {camera_id}: Timer cancelado")
+    
+    def _trigger_auto_access(self, camera_id: str):
+        """Activa el acceso automáticamente después del delay"""
+        try:
+            # Verificar que las condiciones aún se cumplan
+            if camera_id in self.access_conditions_met and self.access_conditions_met[camera_id]:
+                # Obtener el último resultado de procesamiento para obtener nombres identificados
+                processing_result = enhanced_frame_processing_service.get_latest_processing_result(camera_id)
+                identified_names = []
+                
+                if processing_result:
+                    # Obtener nombres de reconocimiento facial
+                    for face_result in processing_result.face_results:
+                        name = face_result.get('name', 'Unknown')
+                        confidence = face_result.get('confidence', 0.0)
+                        if name not in ['Unknown', 'Desconocido'] and confidence >= self.min_confidence_threshold:
+                            if name not in identified_names:
+                                identified_names.append(name)
+                    
+                    # Incluir personas trackeadas con identidad confirmada
+                    for person in processing_result.tracked_persons:
+                        if person.identity_confirmed and person.name not in ['Unknown', 'Desconocido']:
+                            if person.name not in identified_names:
+                                identified_names.append(person.name)
+                
+                # Tarea 1: Activar el relé de acceso
+                self._activate_relay()
+                
+                # Tarea 2: Enviar video por WhatsApp con personas identificadas
+                self._send_access_video_notification(camera_id, identified_names)
+                
+                # Actualizar estadísticas
+                with self.lock:
+                    self.access_stats[camera_id]['auto_access_triggered'] += 1
+                
+                print(f"[ACCESS_GRANTED] {camera_id}: Acceso automático activado - Personas: {', '.join(identified_names)}")
+                
+                # Limpiar estado
+                self.access_conditions_met[camera_id] = False
+                if camera_id in self.access_timers:
+                    del self.access_timers[camera_id]
+                
+        except Exception as e:
+            print(f"[ERROR] Error en trigger_auto_access para {camera_id}: {e}")
+    
     def _evaluate_access_internal(self, processing_result: EnhancedFrameProcessingResult) -> AccessControlResult:
         """Lógica interna de evaluación de acceso"""
         camera_id = processing_result.camera_id
@@ -131,9 +219,10 @@ class AccessControlService:
         # Obtener información de personas detectadas
         total_persons = processing_result.person_count
         face_results = processing_result.face_results
+        tracked_persons = processing_result.tracked_persons
         
-        # Condición 1: Debe haber más de una persona
-        if total_persons <= 1:
+        # Condición 1: Debe haber al menos una persona
+        if total_persons < 1:
             return AccessControlResult(
                 camera_id=camera_id,
                 access_granted=False,
@@ -161,29 +250,46 @@ class AccessControlService:
                 identified_names.append(name)
                 confidence_scores.append(confidence)
         
-        identified_persons = len(identified_names)
+        # Incluir personas trackeadas con identidad confirmada
+        tracked_identified = []
+        for person in tracked_persons:
+            if person.identity_confirmed and person.name not in ['Unknown', 'Desconocido']:
+                if person.name not in identified_names:  # Evitar duplicados
+                    tracked_identified.append(person.name)
+                    confidence_scores.append(person.confidence)
+        
+        # Combinar nombres identificados
+        all_identified_names = identified_names + tracked_identified
+        
+        identified_persons = len(all_identified_names)
         unknown_persons = unknown_count
         
         # Calcular nivel de confianza promedio
         avg_confidence = sum(confidence_scores) / len(confidence_scores) if confidence_scores else 0.0
         
-        # Condición 2: El número de rostros debe ser mayor que el número de personas
+        # Condición 2: El número de rostros debe ser mayor o igual que el número de personas
+        # NOTA: Esta condición se relaja si hay personas trackeadas con identidad confirmada
         total_faces = len(face_results)
-        if total_faces <= total_persons:
+        has_tracked_identified = len(tracked_identified) > 0
+        
+        # Solo rechazar si hay menos rostros que personas Y no hay personas trackeadas identificadas
+        if total_faces < total_persons and not has_tracked_identified:
             return AccessControlResult(
                 camera_id=camera_id,
                 access_granted=False,
                 total_persons=total_persons,
                 identified_persons=identified_persons,
                 unknown_persons=unknown_persons,
-                identified_names=identified_names,
+                identified_names=all_identified_names,
                 unknown_count=unknown_count,
                 timestamp=timestamp,
                 confidence_level=avg_confidence
             )
         
-        # Condición 3: Todos los rostros deben estar identificados (no ser "desconocido")
-        access_granted = unknown_count == 0 and identified_persons > 0
+        # Condición 3: Acceso concedido si:
+        # - No hay rostros desconocidos Y hay al menos una persona identificada
+        # - O si hay personas trackeadas con identidad confirmada (incluso de espaldas)
+        access_granted = (unknown_count == 0 and identified_persons > 0) or has_tracked_identified
         
         return AccessControlResult(
             camera_id=camera_id,
@@ -191,7 +297,7 @@ class AccessControlService:
             total_persons=total_persons,
             identified_persons=identified_persons,
             unknown_persons=unknown_persons,
-            identified_names=identified_names,
+            identified_names=all_identified_names,
             unknown_count=unknown_count,
             timestamp=timestamp,
             confidence_level=avg_confidence
@@ -256,6 +362,17 @@ class AccessControlService:
                     'access_timeout': self.access_timeout
                 },
                 'statistics': stats,
+                'auto_access_system': {
+                    'enabled': True,
+                    'delay_seconds': self.auto_access_delay,
+                    'conditions_met': self.access_conditions_met.get(camera_id, False),
+                    'timer_active': camera_id in self.access_timers,
+                    'time_remaining': (
+                        max(0, self.auto_access_delay - (time.time() - self.access_start_times[camera_id]))
+                        if camera_id in self.access_start_times and self.access_conditions_met.get(camera_id, False)
+                        else 0
+                    )
+                },
                 'recent_history': [
                     {
                         'access_granted': result.access_granted,
@@ -401,7 +518,8 @@ class AccessControlService:
                     response = loop.run_until_complete(relay_service.set_relay_state(relay_id, command))
                     
                     if response.success:
-                        print(f"[INFO] Relé {relay_id} activado por 5 segundos - Acceso concedido")
+                        # Relay activated for 5 seconds - Access granted
+                        pass
                     else:
                         print(f"[ERROR] Error activando relé {relay_id}: {response.message}")
                         
@@ -418,6 +536,64 @@ class AccessControlService:
             
         except Exception as e:
             print(f"[ERROR] Error en _activate_relay: {e}")
+    
+    def _send_access_video_notification(self, camera_id: str, identified_names: List[str]):
+        """Envía notificación de video por WhatsApp para acceso concedido"""
+        try:
+            from services.whatsapp_service import whatsapp_service
+            
+            # Enviar video por WhatsApp con el tipo de evento correcto
+            success = whatsapp_service.send_intrusion_notification(
+                camera_id=camera_id,
+                event_type="access_granted",
+                person_count=len(identified_names) if identified_names else 1,
+                face_count=len(identified_names) if identified_names else 1,
+                identified_names=identified_names
+            )
+            
+            if success:
+                names_text = ", ".join(identified_names) if identified_names else "Sin identificar"
+                print(f"[ACCESS_GRANTED] Video de acceso enviado por WhatsApp para {camera_id} - Personas: {names_text}")
+            else:
+                print(f"[ERROR] Falló el envío de video de acceso por WhatsApp para {camera_id}")
+            
+        except Exception as e:
+            print(f"[ERROR] Error enviando video de acceso por WhatsApp para {camera_id}: {e}")
+    
+    def cancel_all_auto_access_timers(self, camera_id: str = None):
+        """Cancela todos los timers de acceso automático"""
+        cancelled_count = 0
+        
+        if camera_id:
+            # Cancelar timer específico de una cámara
+            if camera_id in self.access_timers:
+                self.access_timers[camera_id].cancel()
+                del self.access_timers[camera_id]
+                cancelled_count = 1
+                
+            if camera_id in self.access_conditions_met:
+                self.access_conditions_met[camera_id] = False
+                
+            print(f"[ACCESS_AUTO] Timer cancelado para cámara {camera_id}")
+        else:
+            # Cancelar todos los timers
+            for cam_id, timer in list(self.access_timers.items()):
+                timer.cancel()
+                cancelled_count += 1
+                
+            self.access_timers.clear()
+            self.access_conditions_met.clear()
+            self.access_start_times.clear()
+            
+            if cancelled_count > 0:
+                print(f"[ACCESS_AUTO] {cancelled_count} timers de acceso automático cancelados")
+        
+        return cancelled_count
+    
+    def shutdown(self):
+        """Cierra el servicio y cancela todos los timers"""
+        self.cancel_all_auto_access_timers()
+        # Access Control Service shutdown complete
 
 # Global instance
 access_control_service = AccessControlService()

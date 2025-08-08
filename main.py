@@ -5,7 +5,7 @@ import threading
 import time
 from config.firebase import initialize_firebase
 from config.tls_config import get_uvicorn_ssl_config, print_tls_info
-from endpoints import camera, config, whatsapp, auth, relay
+from endpoints import camera, config, whatsapp, auth, relay, tracking_status
 from services.firebase_service import monitor_firebase_visitors
 from surveillance.surveillance_service import surveillance_service
 from auth.dependencies import get_current_active_user
@@ -30,6 +30,7 @@ app.include_router(camera.router)
 app.include_router(config.router)
 app.include_router(whatsapp.router)
 app.include_router(relay.router)
+app.include_router(tracking_status.router)
 
 # Inicializar Firebase
 firebase_initialized = initialize_firebase()
@@ -56,7 +57,7 @@ if __name__ == "__main__":
         name="surveillance_cam2"
     )
     surveillance_thread1.start()
-    print("[INFO] Iniciando surveillance automático para cam1")
+    # Starting automatic surveillance for cam1
 
     surveillance_thread2 = threading.Thread(
         target=lambda: surveillance_service.start_monitoring("cam2"),
@@ -64,7 +65,7 @@ if __name__ == "__main__":
         name="surveillance_cam2"
     )
     surveillance_thread2.start()
-    print("[INFO] Iniciando surveillance automático para cam2")
+    # Starting automatic surveillance for cam2
 
     surveillance_thread3 = threading.Thread(
         target=lambda: surveillance_service.start_monitoring("cam3"),
@@ -72,17 +73,17 @@ if __name__ == "__main__":
         name="surveillance_cam3"
     )
     surveillance_thread3.start()
-    print("[INFO] Iniciando surveillance automático para cam3")
+    # Starting automatic surveillance for cam3
     
     # Iniciar el servidor FastAPI
     # Configurar TLS/HTTPS si está disponible
     ssl_config = get_uvicorn_ssl_config()
     print_tls_info()
     
-    print("[INFO] Iniciando servidor FastAPI en puerto 8000")
+    # Starting FastAPI server on port 8000
     if ssl_config:
-        print("[INFO] Servidor iniciando con TLS/HTTPS habilitado")
+        # Server starting with TLS/HTTPS enabled
         uvicorn.run(app, host="0.0.0.0", port=8000, **ssl_config)
     else:
-        print("[INFO] Servidor iniciando en modo HTTP (desarrollo)")
+        # Server starting in HTTP mode (development)
         uvicorn.run(app, host="0.0.0.0", port=8000)

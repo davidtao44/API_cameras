@@ -26,8 +26,8 @@ def generate_stream(config, camera_id: str):
     for frame in frame_generator:
         current_time = time.time()
         
-        # Submit frame for background processing
-        enhanced_frame_processing_service.submit_frame_for_processing(frame, camera_id)
+        # REMOVED: Frame submission moved to surveillance_service.py to centralize control
+        # enhanced_frame_processing_service.submit_frame_for_processing(frame, camera_id)
         
         # Get latest processing result
         processing_result = enhanced_frame_processing_service.get_latest_processing_result(camera_id)

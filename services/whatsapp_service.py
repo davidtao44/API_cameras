@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 # Import configuration
 from config.camera_config import CAMERAS
 from surveillance.enhanced_frame_processing_service import enhanced_frame_processing_service
+from utils.schedule_checker import schedule_checker
 
 # Configure timezone
 BOGOTA_TZ = pytz.timezone('America/Bogota')
@@ -32,7 +33,7 @@ class VideoBuffer:
         self.max_duration = max_duration  # seconds
         self.frames = deque()  # (frame, timestamp)
         self.lock = threading.Lock()
-        self.fps = 10  # Target FPS for video creation
+        self.fps = 6  # Target FPS for video creation (mejorado para reproducción más fluida)
         
     def add_frame(self, frame: np.ndarray, timestamp: datetime):
         """Add a frame to the buffer"""
@@ -81,7 +82,7 @@ class WhatsAppService:
         
         # Notification cooldown to prevent spam
         self.last_notification_time: Dict[str, datetime] = {}
-        self.notification_cooldown = 300  # 5 minutes between notifications per camera
+        self.notification_cooldown = 60  # 5 minutes between notifications per camera
         
         # Initialize video buffers for all cameras
         for camera_id, config in CAMERAS.items():
@@ -97,7 +98,7 @@ class WhatsAppService:
         )
         self.collection_thread.start()
         
-        print("[INFO] WhatsApp Service initialized with EvoAPI")
+        # WhatsApp Service initialized with EvoAPI
     
     def _collect_frames(self):
         """Background thread to collect processed frames for video creation"""
@@ -105,20 +106,33 @@ class WhatsAppService:
         
         while self.collection_active:
             try:
-                for camera_id in CAMERAS.keys():
-                    # Get latest processed frame
-                    processing_result = enhanced_frame_processing_service.get_latest_processing_result(camera_id)
-                    
-                    if processing_result:
-                        # Check if this is a new frame (avoid duplicates from cache)
-                        last_timestamp = last_frame_timestamps.get(camera_id)
-                        if last_timestamp is None or processing_result.timestamp > last_timestamp:
-                            # Add processed frame to buffer only if it's new
-                            self.video_buffers[camera_id].add_frame(
-                                processing_result.processed_frame,
-                                processing_result.timestamp
-                            )
-                            last_frame_timestamps[camera_id] = processing_result.timestamp
+                # Import surveillance service here to avoid circular imports
+                from surveillance.surveillance_service import surveillance_service
+                
+                # Only collect frames when surveillance is active
+                if surveillance_service.monitoring_active:
+                    for camera_id in CAMERAS.keys():
+                        # Get latest processed frame
+                        processing_result = enhanced_frame_processing_service.get_latest_processing_result(camera_id)
+                        
+                        if processing_result:
+                            # Check if this is a new frame (avoid duplicates from cache)
+                            last_timestamp = last_frame_timestamps.get(camera_id)
+                            if last_timestamp is None or processing_result.timestamp > last_timestamp:
+                                # Add processed frame to buffer only if it's new
+                                self.video_buffers[camera_id].add_frame(
+                                    processing_result.processed_frame,
+                                    processing_result.timestamp
+                                )
+                                last_frame_timestamps[camera_id] = processing_result.timestamp
+                else:
+                    # Clear old frames when surveillance is not active
+                    for camera_id in CAMERAS.keys():
+                        if camera_id in self.video_buffers:
+                            with self.video_buffers[camera_id].lock:
+                                self.video_buffers[camera_id].frames.clear()
+                    # Reset timestamps when surveillance stops
+                    last_frame_timestamps.clear()
                 
                 time.sleep(0.1)  # Collect frames every 100ms
                 
@@ -129,8 +143,19 @@ class WhatsAppService:
     def _create_video_from_buffer(self, camera_id: str, duration_seconds: int = 10) -> str:
         """Crea un video MP4 compatible con WhatsApp a partir de los frames en el buffer"""
         try:
+            # Wait for frames to be available (up to 3 seconds)
+            max_wait_time = 3.0
+            wait_interval = 0.2
+            waited_time = 0.0
+            
+            while waited_time < max_wait_time:
+                if camera_id in self.video_buffers and self.video_buffers[camera_id].frames:
+                    break
+                time.sleep(wait_interval)
+                waited_time += wait_interval
+            
             if camera_id not in self.video_buffers or not self.video_buffers[camera_id].frames:
-                print(f"[ERROR] No hay frames disponibles en el buffer de video para {camera_id}")
+                print(f"[ERROR] No hay frames disponibles en el buffer de video para {camera_id} después de esperar {max_wait_time}s")
                 return ""
             
             frames_buffer = self.video_buffers[camera_id]
@@ -138,13 +163,19 @@ class WhatsAppService:
             # Calcular cuántos frames necesitamos para la duración deseada
             frames_needed = min(duration_seconds * frames_buffer.fps, len(frames_buffer.frames))
             
-            if frames_needed < 10:  # Mínimo 10 frames para un video válido para WhatsApp
-                print(f"[ERROR] Insuficientes frames para crear video ({frames_needed} frames disponibles)")
+            # Mínimo de frames para un video válido (al menos 2 segundos)
+            min_frames_required = frames_buffer.fps * 2
+            if frames_needed < min_frames_required:
+                print(f"[ERROR] Insuficientes frames para crear video ({frames_needed} frames disponibles, mínimo {min_frames_required})")
                 return ""
+                
+            # Creating video with specified frames and FPS
             
-            # Tomar los frames más recientes y filtrar duplicados por timestamp
-            all_frames = list(frames_buffer.frames)
+            # Obtener frames del buffer de forma rápida para minimizar el tiempo de lock
+            with frames_buffer.lock:
+                all_frames = list(frames_buffer.frames)
             
+            # Procesar frames fuera del lock para no bloquear la adición de nuevos frames
             # Filtrar frames duplicados basado en timestamp
             unique_frames = []
             seen_timestamps = set()
@@ -164,17 +195,33 @@ class WhatsAppService:
             if not recent_frames:
                 return ""
             
-            print(f"[DEBUG] Using {len(recent_frames)} unique frames out of {len(all_frames)} total frames for {camera_id}")
-            
+           
             # Obtener dimensiones del primer frame
             first_frame = recent_frames[0][0]  # frame is the first element of tuple (frame, timestamp)
-            height, width = first_frame.shape[:2]
+            original_height, original_width = first_frame.shape[:2]
+            
+            # Optimizar resolución para WhatsApp (máximo 1280x720 para mejor compatibilidad)
+            max_width, max_height = 1280, 720
+            
+            # Calcular nueva resolución manteniendo aspect ratio
+            aspect_ratio = original_width / original_height
+            if original_width > max_width or original_height > max_height:
+                if aspect_ratio > 1:  # landscape
+                    width = max_width
+                    height = int(max_width / aspect_ratio)
+                else:  # portrait
+                    height = max_height
+                    width = int(max_height * aspect_ratio)
+            else:
+                width, height = original_width, original_height
             
             # Asegurar que las dimensiones sean pares (requerido por H.264)
             if width % 2 != 0:
                 width -= 1
             if height % 2 != 0:
                 height -= 1
+                
+            # Video resolution adjusted
             
             # Crear archivo temporal
             with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
@@ -200,16 +247,23 @@ class WhatsAppService:
                 
                 video_writer.release()
                 
-                # Recodificar con FFmpeg para compatibilidad con WhatsApp (H.264)
+                # Recodificar con FFmpeg para máxima compatibilidad con WhatsApp
                 import subprocess
                 ffmpeg_cmd = [
                     'ffmpeg', '-y',  # -y para sobrescribir sin preguntar
                     '-i', temp_raw_video,  # archivo de entrada
                     '-c:v', 'libx264',  # codec de video H.264
-                    '-preset', 'fast',  # preset de codificación rápida
-                    '-crf', '23',  # calidad (18-28, menor = mejor calidad)
+                    '-profile:v', 'baseline',  # perfil baseline para máxima compatibilidad
+                    '-level', '3.0',  # nivel H.264 compatible con dispositivos móviles
+                    '-preset', 'medium',  # preset balanceado para mejor calidad
+                    '-crf', '20',  # mejor calidad (menor valor = mejor calidad)
                     '-pix_fmt', 'yuv420p',  # formato de pixel compatible
+                    '-r', str(frames_buffer.fps),  # framerate explícito
+                    '-g', str(frames_buffer.fps * 2),  # keyframe cada 2 segundos
+                    '-sc_threshold', '0',  # deshabilitar detección de cambio de escena
                     '-movflags', '+faststart',  # optimización para streaming
+                    '-avoid_negative_ts', 'make_zero',  # evitar timestamps negativos
+                    '-fflags', '+genpts',  # generar timestamps de presentación
                     temp_video_path  # archivo de salida
                 ]
                 
@@ -223,7 +277,7 @@ class WhatsAppService:
                     print(f"[ERROR] Error en FFmpeg: {result.stderr}")
                     return ""
                 
-                print(f"[INFO] Video creado exitosamente con H.264: {temp_video_path}")
+                # Video created successfully with H.264
                 
                 # Save a copy of the video in the root folder for verification
                 import shutil
@@ -232,7 +286,7 @@ class WhatsAppService:
                 timestamp = int(time.time())
                 saved_video_path = os.path.join(root_videos_dir, f"video_{camera_id}_{timestamp}.mp4")
                 shutil.copy2(temp_video_path, saved_video_path)
-                print(f"[INFO] Video guardado para verificación: {saved_video_path}")
+                # Video saved for verification
                 
                 return temp_video_path
                 
@@ -263,7 +317,6 @@ class WhatsAppService:
                 with open(video_path, 'rb') as video_file:
                     video_data = video_file.read()
                     video_size_mb = len(video_data) / (1024 * 1024)
-                    print(f"[DEBUG] Video file size: {video_size_mb:.2f} MB")
                     
                     if video_size_mb > 16:  # WhatsApp limit is usually 16MB
                         print(f"[ERROR] Video file too large: {video_size_mb:.2f} MB (max 16MB)")
@@ -299,8 +352,7 @@ class WhatsAppService:
                     
                     # Send request to Evolution API
                     api_url = f"{self.evoapi_url}/message/sendMedia/{self.instance_name}"
-                    print(f"[DEBUG] API URL: {api_url}")
-                    print(f"[DEBUG] Headers: {headers}")
+                    
                     
                     response = requests.post(
                         api_url,
@@ -309,17 +361,17 @@ class WhatsAppService:
                         timeout=30
                     )
                     
-                    print(f"[DEBUG] Response status: {response.status_code}")
-                    print(f"[DEBUG] Response headers: {dict(response.headers)}")
+                    
                     
                     if response.status_code == 201:
                         success_count += 1
-                        print(f"[INFO] WhatsApp video sent successfully to {phone_number}")
+                        # WhatsApp video sent successfully
                         try:
                             response_json = response.json()
-                            print(f"[DEBUG] Response received successfully")
+                            
                         except:
-                            print(f"[DEBUG] Response received as text")
+                            # Response received as text
+                            pass
                     else:
                         print(f"[ERROR] Failed to send WhatsApp video to {phone_number}: {response.status_code}")
                         print(f"[ERROR] Request failed with status code: {response.status_code}")
@@ -339,30 +391,44 @@ class WhatsAppService:
             return False
     
     def send_intrusion_notification(self, camera_id: str, event_type: str, 
-                                  person_count: int, face_count: int) -> bool:
+                                  person_count: int, face_count: int, identified_names: List[str] = None) -> bool:
         """Send intrusion notification with video"""
         try:
             # Check if notifications are enabled for this camera
             camera_config = CAMERAS.get(camera_id, {})
-            if not camera_config.get('whatsapp_notifications_enabled', False):
-                print(f"[INFO] WhatsApp notifications disabled for {camera_id}")
+            notifications_enabled = camera_config.get('whatsapp_notifications_enabled', False)
+           
+            if not notifications_enabled:
+                # WhatsApp notifications disabled
+                return False
+            
+            # Check if current time is within notification schedule
+            schedule_allowed = schedule_checker.is_notification_time_allowed(camera_config)
+           
+            
+            if not schedule_allowed:
+                schedule_info = schedule_checker.get_schedule_info(camera_config)
+                # WhatsApp notifications outside of scheduled hours
                 return False
             
             # Check cooldown period
             current_time = datetime.now(BOGOTA_TZ)
             last_notification = self.last_notification_time.get(camera_id)
             
+            
             if last_notification:
                 time_since_last = (current_time - last_notification).total_seconds()
                 if time_since_last < self.notification_cooldown:
                     remaining_time = self.notification_cooldown - time_since_last
-                    print(f"[INFO] WhatsApp notification cooldown active for {camera_id}, {remaining_time:.0f}s remaining")
+                    # WhatsApp notification cooldown active
                     return False
+            
             
             # Get phone numbers for this camera
             phone_numbers = camera_config.get('notification_phones', [])
+            
             if not phone_numbers:
-                print(f"[WARNING] No phone numbers configured for {camera_id}")
+                # No phone numbers configured
                 return False
             
             # Create video from buffer
@@ -373,6 +439,7 @@ class WhatsAppService:
                 print(f"[ERROR] Failed to create video for {camera_id}")
                 return False
             
+            
             # Save a copy of the video in the root folder for verification
             import shutil
             import os
@@ -381,36 +448,60 @@ class WhatsAppService:
             timestamp = int(time.time())
             saved_video_path = os.path.join(root_videos_dir, f"video_{camera_id}_{timestamp}.mp4")
             shutil.copy2(video_path, saved_video_path)
-            print(f"[INFO] Video guardado para verificación: {saved_video_path}")
+            # Video saved for verification
             
             try:
                 # Create notification message
                 timestamp_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
                 
-                if event_type == 'face_mismatch':
+                if event_type == 'access_granted':
+                    # Mensaje para acceso concedido
+                    message = f"🔓 *ACCESO AUTOMÁTICO CONCEDIDO* 🔓\n\n"
+                    message += f"📹 Cámara: {camera_id.upper()}\n"
+                    message += f"✅ Estado: Acceso Autorizado\n"
+                    
+                    # Incluir nombres de personas identificadas si están disponibles
+                    if identified_names and len(identified_names) > 0:
+                        names_text = ", ".join(identified_names)
+                        message += f"👥 Personas identificadas: {names_text}\n"
+                    
+                    message += f"🕐 Hora: {timestamp_str}\n\n"
+                   
+                elif event_type == 'face_mismatch':
                     condition_name = "Discrepancia de Rostros"
                     details = f"Se detectaron {person_count} personas pero solo {face_count} rostros"
+                    message = f"🚨 *ALERTA DE SEGURIDAD* 🚨\n\n"
+                    message += f"📹 Cámara: {camera_id.upper()}\n"
+                    message += f"⚠️ Tipo: {condition_name}\n"
+                    message += f"📊 Detalles: {details}\n"
+                    message += f"🕐 Hora: {timestamp_str}\n\n"
+                   
                 elif event_type == 'unknown_person':
                     condition_name = "Persona Desconocida"
                     details = f"Se detectó una persona no autorizada"
+                    message = f"🚨 *ALERTA DE SEGURIDAD* 🚨\n\n"
+                    message += f"📹 Cámara: {camera_id.upper()}\n"
+                    message += f"⚠️ Tipo: {condition_name}\n"
+                    message += f"📊 Detalles: {details}\n"
+                    message += f"🕐 Hora: {timestamp_str}\n\n"
+                   
                 else:
                     condition_name = "Intrusión Detectada"
                     details = f"Personas: {person_count}, Rostros: {face_count}"
+                    message = f"🚨 *ALERTA DE SEGURIDAD* 🚨\n\n"
+                    message += f"📹 Cámara: {camera_id.upper()}\n"
+                    message += f"⚠️ Tipo: {condition_name}\n"
+                    message += f"📊 Detalles: {details}\n"
+                    message += f"🕐 Hora: {timestamp_str}\n\n"
+                   
                 
-                message = f"🚨 *ALERTA DE SEGURIDAD* 🚨\n\n"
-                message += f"📹 Cámara: {camera_id.upper()}\n"
-                message += f"⚠️ Tipo: {condition_name}\n"
-                message += f"📊 Detalles: {details}\n"
-                message += f"🕐 Hora: {timestamp_str}\n\n"
-                message += f"📹 Video adjunto de los últimos {video_duration} segundos"
-                
-                # Send WhatsApp notification
                 success = self.send_whatsapp_video(
                     phone_numbers=phone_numbers,
                     video_path=video_path,
                     message=message,
                     camera_id=camera_id
                 )
+                
                 
                 if success:
                     # Update last notification time
@@ -424,7 +515,8 @@ class WhatsAppService:
                 try:
                     os.unlink(video_path)
                 except Exception as e:
-                    print(f"[WARNING] Failed to delete temporary video file: {e}")
+                    # Failed to delete temporary video file
+                    pass
             
         except Exception as e:
             print(f"[ERROR] Error sending intrusion notification for {camera_id}: {e}")
@@ -470,6 +562,51 @@ class WhatsAppService:
                 for camera_id, timestamp in self.last_notification_time.items()
             }
         }
+    
+    def send_recognition_confirmation_video(self, camera_id: str, phone_numbers: List[str], 
+                                          recognized_persons: List[str], description: str) -> bool:
+        """Send a video confirmation when all persons have been recognized for 3+ seconds"""
+        try:
+            # Get camera configuration
+            camera_config = CAMERAS.get(camera_id, {})
+            video_duration = camera_config.get('video_duration', 10)
+            
+            # Get video buffer for the camera
+            if camera_id not in self.video_buffers:
+                print(f"[WARNING] No video buffer available for {camera_id}")
+                return False
+            
+            # Create video from buffer
+            video_path = self._create_video_from_buffer(camera_id, video_duration)
+            if not video_path:
+                print(f"[ERROR] Failed to create recognition confirmation video for {camera_id}")
+                return False
+
+            try:
+                # Send WhatsApp notification with video
+                success = self.send_whatsapp_video(
+                    phone_numbers=phone_numbers,
+                    video_path=video_path,
+                    message=description,
+                    camera_id=camera_id
+                )
+                
+                if success:
+                    print(f"[INFO] Recognition confirmation video sent for {camera_id}")
+                
+                return success
+                
+            finally:
+                # Clean up temporary video file
+                try:
+                    os.unlink(video_path)
+                except Exception as e:
+                    # Failed to delete temporary recognition video file
+                    pass
+            
+        except Exception as e:
+            print(f"[ERROR] Error sending recognition confirmation video for {camera_id}: {e}")
+            return False
     
     def shutdown(self):
         """Shutdown the WhatsApp service"""
