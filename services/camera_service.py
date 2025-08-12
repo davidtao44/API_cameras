@@ -38,7 +38,7 @@ def generate_stream(config, camera_id: str):
             
             # Update cached data if enough time has passed
             if current_time - last_analysis_time >= analysis_interval:
-                last_detected_names = processing_result.detected_names
+                last_detected_names = processing_result.all_detected_names
                 last_person_count = processing_result.person_count
                 last_analysis_time = current_time
                 

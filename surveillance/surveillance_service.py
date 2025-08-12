@@ -174,7 +174,7 @@ class SurveillanceService:
         processed_frame = processing_result.processed_frame
         person_count = processing_result.person_count
         face_count = processing_result.face_count
-        detected_names = processing_result.detected_names
+        detected_names = processing_result.all_detected_names
         
         # Update frame counter
         self.frame_counters[camera_id] = self.frame_counters.get(camera_id, 0) + 1
@@ -185,7 +185,7 @@ class SurveillanceService:
                 camera_id=camera_id,
                 person_count=person_count,
                 face_count=face_count,
-                detected_names=detected_names,
+                detected_names=processing_result.all_detected_names,
                 timestamp=processing_result.timestamp,
                 tracked_persons=processing_result.tracked_persons
             )

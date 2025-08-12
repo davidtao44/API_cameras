@@ -137,18 +137,26 @@ class IntrusionDetectionService:
             # Calculate unknown count: only count truly unknown persons
             # Don't count tracked persons with confirmed identity as unknown, even without visible face
             face_detected_unknown = detected_names.count('Unknown')
-            unknown_count = max(0, person_count - total_known_persons)
             
+            # Si hay detección de personas, usar la lógica original
+            # Si no hay detección de personas pero sí rostros, considerar rostros desconocidos
+            if person_count > 0:
+                unknown_count = max(0, person_count - total_known_persons)
+            else:
+                # Solo detección facial: contar rostros desconocidos
+                unknown_count = face_detected_unknown
             
             # Check conditions for intrusion
-            # Face mismatch should only trigger if there are more bodies than faces detected
-            # but we should not count tracked known persons without visible faces as a mismatch
-            face_mismatch = person_count > face_count and unknown_count > 0
+            # Optimized logic: Only trigger intrusion if there are truly unknown persons or faces
+            # Don't require both body and face detection - tracked persons with confirmed identity are valid
+            # Face mismatch only matters if there are actually unknown persons without any form of identification
+            face_mismatch = person_count > face_count and unknown_count > 0 and tracked_known_count == 0
             unknown_persons = unknown_count > 0
             
-            
             # Determine if any intrusion condition is met
-            intrusion_detected = face_mismatch or unknown_persons
+            # Intrusion is only detected if there are unknown persons/faces that cannot be identified through tracking
+            # Permitir detección de intrusos solo con rostros desconocidos
+            intrusion_detected = unknown_persons and (face_mismatch or tracked_known_count == 0 or (person_count == 0 and face_count > 0))
             
             if intrusion_detected:
                 # Reset no-intrusion frame counter when intrusion is detected
@@ -222,8 +230,9 @@ class IntrusionDetectionService:
     def _check_all_persons_recognized(self, camera_id: str, person_count: int, unknown_count: int, 
                                     all_known_names: set, timestamp: datetime):
         """Check if all persons have been recognized for more than 3 seconds"""
-        # Only proceed if there are persons detected and no unknowns
-        if person_count > 0 and unknown_count == 0 and len(all_known_names) > 0:
+        # Only proceed if there are persons OR faces detected and no unknowns
+        # Permitir funcionamiento solo con detección facial
+        if (person_count > 0 or len(all_known_names) > 0) and unknown_count == 0 and len(all_known_names) > 0:
             # Increment consecutive frames with all persons recognized
             self.all_recognized_frames[camera_id] = self.all_recognized_frames.get(camera_id, 0) + 1
             

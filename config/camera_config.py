@@ -10,7 +10,7 @@ CAMERAS = {
         "notification_phones": ['573107834112', '573222262665', '573228097407'],# '573132843357', '573209838287', '573228097407'],  # Números específicos por cámara
         "video_duration_seconds": 20,
         "notification_schedule": {
-            "enabled": True,  # Habilitar control de horarios
+            "enabled": False,  # Habilitar control de horarios
             "start_time": "17:30",  # Hora de inicio (6:00 PM)
             "end_time": "08:00",    # Hora de fin (8:00 AM del día siguiente)
             "timezone": "America/Bogota"  # Zona horaria de Colombia
@@ -32,7 +32,7 @@ CAMERAS = {
             "min_face_size": 60,           # Tamaño mínimo de rostro para detección (píxeles)
             "max_distance_threshold": 200, # Distancia máxima para asociar rostros con personas (píxeles)
             "person_confidence": 0.9,      # Confianza mínima para detección de personas (0.0-1.0)
-            "face_confidence": 0.45,        # Confianza mínima para reconocimiento facial (0.0-1.0)
+            "face_confidence": 0.35,        # Confianza mínima para reconocimiento facial (0.0-1.0)
         },
     },
     "cam2": {

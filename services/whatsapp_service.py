@@ -13,6 +13,7 @@ import threading
 import time
 import base64
 from typing import List, Dict, Any, Optional
+from threading import Timer
 from datetime import datetime, timedelta
 from collections import deque
 import pytz
@@ -77,17 +78,20 @@ class WhatsAppService:
         self.api_key = api_key or os.environ.get('EVOAPI_KEY')
         self.instance_name = instance_name or os.environ.get('EVOAPI_INSTANCE')
         
-        # Video buffers for each camera
+        # Video buffers for each camera (increased to 30 seconds to capture before/after)
         self.video_buffers: Dict[str, VideoBuffer] = {}
         
         # Notification cooldown to prevent spam
         self.last_notification_time: Dict[str, datetime] = {}
         self.notification_cooldown = 60  # 5 minutes between notifications per camera
         
-        # Initialize video buffers for all cameras
+        # Alarm event timestamps for before/after video creation
+        self.alarm_event_times: Dict[str, datetime] = {}
+        
+        # Initialize video buffers for all cameras (30 seconds to capture before/after)
         for camera_id, config in CAMERAS.items():
-            video_duration = config.get('video_duration_seconds', 10)
-            self.video_buffers[camera_id] = VideoBuffer(camera_id, video_duration)
+            # Increase buffer to 30 seconds to capture 10 seconds before and after
+            self.video_buffers[camera_id] = VideoBuffer(camera_id, 30)
         
         # Start frame collection thread
         self.collection_active = True
@@ -392,7 +396,7 @@ class WhatsAppService:
     
     def send_intrusion_notification(self, camera_id: str, event_type: str, 
                                   person_count: int, face_count: int, identified_names: List[str] = None) -> bool:
-        """Send intrusion notification with video"""
+        """Send intrusion notification with video - schedules a single video with 10s before and after event"""
         try:
             # Check if notifications are enabled for this camera
             camera_config = CAMERAS.get(camera_id, {})
@@ -431,41 +435,75 @@ class WhatsAppService:
                 # No phone numbers configured
                 return False
             
-            # Create video from buffer
-            video_duration = camera_config.get('video_duration_seconds', 10)
-            video_path = self._create_video_from_buffer(camera_id, video_duration)
+            # Store alarm event data for later video creation
+            event_time = time.time()
+            alarm_data = {
+                'camera_id': camera_id,
+                'event_type': event_type,
+                'person_count': person_count,
+                'face_count': face_count,
+                'identified_names': identified_names,
+                'phone_numbers': phone_numbers,
+                'event_time': event_time,
+                'timestamp_str': current_time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Schedule video creation and sending for 10 seconds later
+            # This allows capturing 10 seconds before (already in buffer) and 10 seconds after the event
+            timer = Timer(10.0, self._send_alarm_video, args=[alarm_data])
+            timer.start()
+            
+            # Update last notification time immediately to prevent spam
+            self.last_notification_time[camera_id] = current_time
+            
+            print(f"[INFO] Alarm video scheduled for {camera_id} - will be sent in 10 seconds")
+            return True
+            
+        except Exception as e:
+            print(f"[ERROR] Error sending intrusion notification for {camera_id}: {e}")
+            return False
+    
+    def _send_alarm_video(self, alarm_data: Dict[str, Any]):
+        """Send a single alarm video that includes 10 seconds before and after the event"""
+        try:
+            camera_id = alarm_data['camera_id']
+            event_type = alarm_data['event_type']
+            person_count = alarm_data['person_count']
+            face_count = alarm_data['face_count']
+            identified_names = alarm_data['identified_names']
+            phone_numbers = alarm_data['phone_numbers']
+            event_time = alarm_data['event_time']
+            timestamp_str = alarm_data['timestamp_str']
+            
+            # Create video with 20 seconds total (10 before + 10 after the event)
+            video_path = self._create_alarm_video_with_context(camera_id, event_time)
             
             if not video_path:
-                print(f"[ERROR] Failed to create video for {camera_id}")
-                return False
-            
+                print(f"[ERROR] Failed to create alarm video for {camera_id}")
+                return
             
             # Save a copy of the video in the root folder for verification
             import shutil
-            import os
             root_videos_dir = "/home/tecon/Documentos/Camara/API_Camaras_Server/videos"
             os.makedirs(root_videos_dir, exist_ok=True)
             timestamp = int(time.time())
             saved_video_path = os.path.join(root_videos_dir, f"video_{camera_id}_{timestamp}.mp4")
             shutil.copy2(video_path, saved_video_path)
-            # Video saved for verification
+            print(f"[INFO] Alarm video saved: {saved_video_path}")
             
             try:
                 # Create notification message
-                timestamp_str = current_time.strftime('%Y-%m-%d %H:%M:%S')
-                
                 if event_type == 'access_granted':
-                    # Mensaje para acceso concedido
                     message = f"🔓 *ACCESO AUTOMÁTICO CONCEDIDO* 🔓\n\n"
                     message += f"📹 Cámara: {camera_id.upper()}\n"
                     message += f"✅ Estado: Acceso Autorizado\n"
                     
-                    # Incluir nombres de personas identificadas si están disponibles
                     if identified_names and len(identified_names) > 0:
                         names_text = ", ".join(identified_names)
                         message += f"👥 Personas identificadas: {names_text}\n"
                     
-                    message += f"🕐 Hora: {timestamp_str}\n\n"
+                    message += f"🕐 Hora: {timestamp_str}\n"
+                    message += f"📹 Video: 10s antes y 10s después del evento\n\n"
                    
                 elif event_type == 'face_mismatch':
                     condition_name = "Discrepancia de Rostros"
@@ -474,7 +512,8 @@ class WhatsAppService:
                     message += f"📹 Cámara: {camera_id.upper()}\n"
                     message += f"⚠️ Tipo: {condition_name}\n"
                     message += f"📊 Detalles: {details}\n"
-                    message += f"🕐 Hora: {timestamp_str}\n\n"
+                    message += f"🕐 Hora: {timestamp_str}\n"
+                    message += f"📹 Video: 10s antes y 10s después del evento\n\n"
                    
                 elif event_type == 'unknown_person':
                     condition_name = "Persona Desconocida"
@@ -483,7 +522,8 @@ class WhatsAppService:
                     message += f"📹 Cámara: {camera_id.upper()}\n"
                     message += f"⚠️ Tipo: {condition_name}\n"
                     message += f"📊 Detalles: {details}\n"
-                    message += f"🕐 Hora: {timestamp_str}\n\n"
+                    message += f"🕐 Hora: {timestamp_str}\n"
+                    message += f"📹 Video: 10s antes y 10s después del evento\n\n"
                    
                 else:
                     condition_name = "Intrusión Detectada"
@@ -492,9 +532,10 @@ class WhatsAppService:
                     message += f"📹 Cámara: {camera_id.upper()}\n"
                     message += f"⚠️ Tipo: {condition_name}\n"
                     message += f"📊 Detalles: {details}\n"
-                    message += f"🕐 Hora: {timestamp_str}\n\n"
-                   
+                    message += f"🕐 Hora: {timestamp_str}\n"
+                    message += f"📹 Video: 10s antes y 10s después del evento\n\n"
                 
+                # Send WhatsApp video
                 success = self.send_whatsapp_video(
                     phone_numbers=phone_numbers,
                     video_path=video_path,
@@ -502,25 +543,160 @@ class WhatsAppService:
                     camera_id=camera_id
                 )
                 
-                
                 if success:
-                    # Update last notification time
-                    self.last_notification_time[camera_id] = current_time
-                    print(f"[INFO] WhatsApp intrusion notification sent for {camera_id}")
-                
-                return success
+                    print(f"[INFO] Alarm video sent successfully for {camera_id}")
+                else:
+                    print(f"[ERROR] Failed to send alarm video for {camera_id}")
                 
             finally:
                 # Clean up temporary video file
                 try:
                     os.unlink(video_path)
                 except Exception as e:
-                    # Failed to delete temporary video file
-                    pass
+                    print(f"[WARNING] Failed to delete temporary video file: {e}")
+                    
+        except Exception as e:
+            print(f"[ERROR] Error in _send_alarm_video for {alarm_data.get('camera_id', 'unknown')}: {e}")
+    
+    def _create_alarm_video_with_context(self, camera_id: str, event_time: float) -> str:
+        """Create a video with 10 seconds before and 10 seconds after the alarm event"""
+        try:
+            if camera_id not in self.video_buffers:
+                print(f"[ERROR] No video buffer available for {camera_id}")
+                return ""
+            
+            buffer = self.video_buffers[camera_id]
+            current_time = time.time()
+            
+            # Calculate time range: 10 seconds before event to 10 seconds after event
+            start_time = event_time - 10.0
+            end_time = event_time + 10.0
+            
+            # Collect frames within the time range
+            frames_to_include = []
+            
+            with buffer.lock:
+                for frame_data in buffer.frames:
+                    # frame_data is a tuple (frame, timestamp) where timestamp is datetime
+                    frame, timestamp = frame_data
+                    # Convert datetime timestamp to float for comparison
+                    frame_timestamp = timestamp.timestamp()
+                    if start_time <= frame_timestamp <= end_time:
+                        frames_to_include.append(frame)
+            
+            if not frames_to_include:
+                print(f"[ERROR] No frames found in time range for {camera_id}")
+                return ""
+            
+            # Create video from collected frames
+            video_path = self._create_video_from_frames(frames_to_include, camera_id, "alarm_context")
+            
+            if video_path:
+                print(f"[INFO] Created alarm context video for {camera_id} with {len(frames_to_include)} frames")
+            
+            return video_path
             
         except Exception as e:
-            print(f"[ERROR] Error sending intrusion notification for {camera_id}: {e}")
-            return False
+            print(f"[ERROR] Error creating alarm context video for {camera_id}: {e}")
+            return ""
+    
+    def _create_video_from_frames(self, frames: List[np.ndarray], camera_id: str, video_type: str = "custom") -> str:
+        """Create a video from a list of frames"""
+        try:
+            if not frames:
+                print(f"[ERROR] No frames provided for video creation")
+                return ""
+            
+            # Get dimensions from first frame
+            first_frame = frames[0]
+            original_height, original_width = first_frame.shape[:2]
+            
+            # Optimize resolution for WhatsApp (max 1280x720)
+            max_width, max_height = 1280, 720
+            
+            # Calculate new resolution maintaining aspect ratio
+            aspect_ratio = original_width / original_height
+            if original_width > max_width or original_height > max_height:
+                if aspect_ratio > 1:  # landscape
+                    width = max_width
+                    height = int(max_width / aspect_ratio)
+                else:  # portrait
+                    height = max_height
+                    width = int(max_height * aspect_ratio)
+            else:
+                width, height = original_width, original_height
+            
+            # Ensure dimensions are even (required by H.264)
+            if width % 2 != 0:
+                width -= 1
+            if height % 2 != 0:
+                height -= 1
+            
+            # Create temporary file
+            with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_file:
+                temp_video_path = temp_file.name
+            
+            try:
+                # Create temporary raw video with OpenCV
+                temp_raw_video = temp_video_path.replace('.mp4', '_raw.avi')
+                fourcc = cv2.VideoWriter_fourcc(*'XVID')
+                fps = 6  # Default FPS for alarm videos
+                video_writer = cv2.VideoWriter(temp_raw_video, fourcc, fps, (width, height))
+                
+                if not video_writer.isOpened():
+                    print(f"[ERROR] Error creating video writer for {camera_id}")
+                    return ""
+                
+                # Write frames to video
+                for frame in frames:
+                    # Resize frame if necessary
+                    if frame.shape[:2] != (height, width):
+                        frame = cv2.resize(frame, (width, height))
+                    video_writer.write(frame)
+                
+                video_writer.release()
+                
+                # Re-encode with FFmpeg for WhatsApp compatibility
+                import subprocess
+                ffmpeg_cmd = [
+                    'ffmpeg', '-y',
+                    '-i', temp_raw_video,
+                    '-c:v', 'libx264',
+                    '-profile:v', 'baseline',
+                    '-level', '3.0',
+                    '-preset', 'medium',
+                    '-crf', '20',
+                    '-pix_fmt', 'yuv420p',
+                    '-r', str(fps),
+                    '-g', str(fps * 2),
+                    '-sc_threshold', '0',
+                    '-movflags', '+faststart',
+                    '-avoid_negative_ts', 'make_zero',
+                    '-fflags', '+genpts',
+                    temp_video_path
+                ]
+                
+                result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+                
+                # Clean up temporary raw video
+                if os.path.exists(temp_raw_video):
+                    os.unlink(temp_raw_video)
+                
+                if result.returncode != 0:
+                    print(f"[ERROR] FFmpeg error: {result.stderr}")
+                    return ""
+                
+                return temp_video_path
+                
+            except Exception as e:
+                print(f"[ERROR] Error creating video from frames: {e}")
+                if os.path.exists(temp_video_path):
+                    os.unlink(temp_video_path)
+                return ""
+                
+        except Exception as e:
+            print(f"[ERROR] Error in _create_video_from_frames: {e}")
+            return ""
     
     def update_config(self, evoapi_url: str = None, api_key: str = None, 
                      instance_name: str = None, notification_cooldown: int = None):

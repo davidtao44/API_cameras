@@ -221,8 +221,10 @@ class AccessControlService:
         face_results = processing_result.face_results
         tracked_persons = processing_result.tracked_persons
         
-        # Condición 1: Debe haber al menos una persona
-        if total_persons < 1:
+        # Condición 1: Debe haber al menos una persona O al menos un rostro detectado
+        # Permitir funcionamiento solo con detección facial
+        total_faces = len(face_results)
+        if total_persons < 1 and total_faces < 1:
             return AccessControlResult(
                 camera_id=camera_id,
                 access_granted=False,
